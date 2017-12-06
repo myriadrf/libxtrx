@@ -1,0 +1,31 @@
+
+if(NOT LIBXTRXLL_FOUND)
+	if(NOT WIN32)
+		include(FindPkgConfig)
+		pkg_check_modules (LIBXTRXLL_PKG libxtrxll)
+	endif(NOT WIN32)
+
+	find_path(LIBXTRXLL_INCLUDE_DIRS NAMES xtrxll_api.h
+		PATHS
+		${LIBXTRXLL_PKG_INCLUDE_DIRS}
+		/usr/include
+		/usr/local/include
+		)
+
+	find_library(LIBXTRXLL_LIBRARIES NAMES xtrxll
+		PATHS
+		${LIBXTRXLL_PKG_LIBRARY_DIRS}
+		/usr/lib
+		/usr/local/lib
+		)
+
+	if(LIBXTRXLL_INCLUDE_DIRS AND LIBXTRXLL_LIBRARIES)
+		set(LIBXTRXLL_FOUND TRUE CACHE INTERNAL "libxtrxll found")
+		message(STATUS "Found libxtrxll: ${LIBXTRXLL_INCLUDE_DIRS}, ${LIBXTRXLL_LIBRARIES}")
+	else(LIBXTRXLL_INCLUDE_DIRS AND LIBXTRXLL_LIBRARIES)
+		set(LIBXTRXLL_FOUND FALSE CACHE INTERNAL "libxtrxll found")
+		message(STATUS "libxtrxll not found.")
+	endif(LIBXTRXLL_INCLUDE_DIRS AND LIBXTRXLL_LIBRARIES)
+
+	mark_as_advanced(LIBXTRXLL_LIBRARIES LIBXTRXLL_INCLUDE_DIRS)
+endif(NOT LIBXTRXLL_FOUND)

@@ -1,0 +1,15 @@
+prefix=@CMAKE_INSTALL_PREFIX@
+exec_prefix=${prefix}
+libdir=${exec_prefix}/@XTRX_LIBRARY_DIR@
+includedir=${prefix}/@XTRX_INCLUDE_DIR@
+
+Name: @CPACK_PACKAGE_NAME@
+Description: @CPACK_PACKAGE_DESCRIPTION_SUMMARY@
+URL: https://fairwaves.co/
+Version: @CPACK_PACKAGE_VERSION@
+Requires:
+Conflicts:
+Cflags: -I${includedir}
+Libs: -L${libdir} -lxtrx
+Libs.private:  -lrt -lm -ldl -lxtrxll -lxtrxdsp -lxtrx_lms7002m
+
