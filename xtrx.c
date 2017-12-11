@@ -83,7 +83,10 @@ struct xtrx_dev {
 
 	clock_val_t         masterclock;
 	clock_val_t         refclock;
+	xtrx_clock_source_t clock_source;
 
+	unsigned            rxcgen_div;
+	unsigned            txcgen_div;
 	unsigned            rxtsp_div;     /* Div ratio at LML */
 	unsigned            rxtsp_decim;   /* Decimation in TSP */
 	unsigned            txtsp_div;
@@ -267,7 +270,8 @@ int xtrx_open(const char* device, unsigned flags, struct xtrx_dev** outdev)
 
 	xtrxdsp_init();
 
-	dev->refclock = 0; //30720000;
+	dev->refclock = 0;
+	dev->clock_source = XTRX_CLKSRC_INT;
 	*outdev = dev;
 	return 0;
 
@@ -301,6 +305,7 @@ void xtrx_close(struct xtrx_dev* dev)
 
 void xtrx_set_ref_clk(struct xtrx_dev* dev, unsigned refclkhz, xtrx_clock_source_t clksrc)
 {
+	dev->clock_source = clksrc;
 	dev->refclock = refclkhz;
 }
 
@@ -324,15 +329,15 @@ static bool check_lime_decimation(unsigned decim)
 	return false;
 }
 
-static const int diqmap_swap[4]   = { LMS7002M_LML_BQ, LMS7002M_LML_AQ, LMS7002M_LML_BI, LMS7002M_LML_AI };
-static const int diqmap[4]        = { LMS7002M_LML_AQ, LMS7002M_LML_BQ, LMS7002M_LML_AI, LMS7002M_LML_BI };
-static const int diqmap_swap_qi[4]= { LMS7002M_LML_BI, LMS7002M_LML_AI, LMS7002M_LML_BQ, LMS7002M_LML_AQ };
-static const int diqmap_qi[4]     = { LMS7002M_LML_AI, LMS7002M_LML_BI, LMS7002M_LML_AQ, LMS7002M_LML_BQ };
+static const int diqmap_qi[4]        = { LMS7002M_LML_AQ, LMS7002M_LML_BQ, LMS7002M_LML_AI, LMS7002M_LML_BI };
+static const int diqmap_swap_qi[4]   = { LMS7002M_LML_BQ, LMS7002M_LML_AQ, LMS7002M_LML_BI, LMS7002M_LML_AI };
+static const int diqmap[4]           = { LMS7002M_LML_AI, LMS7002M_LML_BI, LMS7002M_LML_AQ, LMS7002M_LML_BQ };
+static const int diqmap_swap[4]      = { LMS7002M_LML_BI, LMS7002M_LML_AI, LMS7002M_LML_BQ, LMS7002M_LML_AQ };
 
-static const int diqmaptx_qi[4]     = { LMS7002M_LML_AQ, LMS7002M_LML_BQ, LMS7002M_LML_AI, LMS7002M_LML_BI };
-static const int diqmaptx_swap_qi[4]= { LMS7002M_LML_BQ, LMS7002M_LML_AQ, LMS7002M_LML_BI, LMS7002M_LML_AI };
-static const int diqmaptx[4]        = { LMS7002M_LML_AI, LMS7002M_LML_BI, LMS7002M_LML_AQ, LMS7002M_LML_BQ };
-static const int diqmaptx_swap[4]   = { LMS7002M_LML_BI, LMS7002M_LML_AI, LMS7002M_LML_BQ, LMS7002M_LML_AQ };
+static const int diqmaptx_qi[4]      = { LMS7002M_LML_AQ, LMS7002M_LML_BQ, LMS7002M_LML_AI, LMS7002M_LML_BI };
+static const int diqmaptx_swap_qi[4] = { LMS7002M_LML_BQ, LMS7002M_LML_AQ, LMS7002M_LML_BI, LMS7002M_LML_AI };
+static const int diqmaptx[4]         = { LMS7002M_LML_AI, LMS7002M_LML_BI, LMS7002M_LML_AQ, LMS7002M_LML_BQ };
+static const int diqmaptx_swap[4]    = { LMS7002M_LML_BI, LMS7002M_LML_AI, LMS7002M_LML_BQ, LMS7002M_LML_AQ };
 
 
 int xtrx_set_samplerate(struct xtrx_dev* dev,
@@ -459,6 +464,9 @@ int xtrx_set_samplerate(struct xtrx_dev* dev,
 		return -EINVAL;
 	}
 
+	// Store all data for correct NCO calculations
+	dev->rxcgen_div = adcdiv_fixed;
+	dev->txcgen_div = dacdiv;
 	dev->rxtsp_div = rxdiv;
 	dev->rxtsp_decim = rxdiv;
 	dev->txtsp_div = txdiv;
@@ -622,10 +630,27 @@ int xtrx_tune(struct xtrx_dev* dev, xtrx_tune_t type, double freq, double *actua
 	}
 
 	if (nco) {
-		if (dir == LMS_TX)
-			LMS7002M_txtsp_set_freq(dev->lmsdrv[i].lms7, LMS_CHAB, freq);
-		else
-			LMS7002M_rxtsp_set_freq(dev->lmsdrv[i].lms7, LMS_CHAB, freq);
+		if (dir == LMS_TX) {
+			double tx_dac_freq = dev->masterclock / dev->txcgen_div;
+			double rel_freq = freq / tx_dac_freq;
+			if (rel_freq > 0.5 || rel_freq < -0.5) {
+				XTRXLL_LOG(XTRXLL_WARNING,
+						   "NCO TX ouf of range, requested %.3f while DAC %.3f\n",
+						   rel_freq / 1000, tx_dac_freq / 1000);
+				return -EINVAL;
+			}
+			LMS7002M_txtsp_set_freq(dev->lmsdrv[i].lms7, LMS_CHAB, rel_freq);
+		} else {
+			double rx_dac_freq = dev->masterclock / dev->rxcgen_div;
+			double rel_freq = -freq / rx_dac_freq;
+			if (rel_freq > 0.5 || rel_freq < -0.5) {
+				XTRXLL_LOG(XTRXLL_WARNING,
+						   "NCO RX ouf of range, requested %.3f (%.3f kHz) while ADC %.3f kHz\n",
+						   rel_freq, freq / 1000, rx_dac_freq / 1000);
+				return -EINVAL;
+			}
+			LMS7002M_rxtsp_set_freq(dev->lmsdrv[i].lms7, LMS_CHAB, rel_freq);
+		}
 		return 0;
 	}
 
@@ -789,12 +814,12 @@ int xtrx_set_antenna(struct xtrx_dev* dev, xtrx_antenna_t antenna)
 		LMS7002M_rfe_set_path(dev->lmsdrv[i].lms7, ch, band);
 		if (0) {
 			dev->rxant = (band == LMS7002M_RFE_LNAW) ? 0 :
-													   (band == LMS7002M_RFE_LNAH) ? 1 :
-																					 (band == LMS7002M_RFE_LNAL) ? 2 : 3;
+						 (band == LMS7002M_RFE_LNAH) ? 1 :
+						 (band == LMS7002M_RFE_LNAL) ? 2 : 3;
 		} else {
 			dev->rxant = (band == LMS7002M_RFE_LNAW) ? 0 :
-													   (band == LMS7002M_RFE_LNAH) ? 2 :
-																					 (band == LMS7002M_RFE_LNAL) ? 1 : 3;
+						 (band == LMS7002M_RFE_LNAH) ? 2 :
+						 (band == LMS7002M_RFE_LNAL) ? 1 : 3;
 		}
 	}
 
@@ -916,7 +941,7 @@ int xtrx_run_ex(struct xtrx_dev* dev, const xtrx_run_params_t* params)
 		rx_mode = (xtrx_run_params_stream_is_mimo(&params->rx)) ? XTRXLL_FE_MODE_MIMO
 																: XTRXLL_FE_MODE_SISO;
 		rx_fe_fmt = (params->rx.wfmt == XTRX_WF_8) ? XTRXLL_FE_8BIT :
-													 (params->rx.wfmt == XTRX_WF_12) ? XTRXLL_FE_12BIT : XTRXLL_FE_16BIT;
+					(params->rx.wfmt == XTRX_WF_12) ? XTRXLL_FE_12BIT : XTRXLL_FE_16BIT;
 		rx_stream_count = (rx_mode == XTRXLL_FE_MODE_SISO) ? 1 : 2;
 	}
 
@@ -938,7 +963,7 @@ int xtrx_run_ex(struct xtrx_dev* dev, const xtrx_run_params_t* params)
 		tx_mode = (xtrx_run_params_stream_is_mimo(&params->tx)) ? XTRXLL_FE_MODE_MIMO
 																: XTRXLL_FE_MODE_SISO;
 		tx_fe_fmt = (params->tx.wfmt == XTRX_WF_8) ? XTRXLL_FE_8BIT :
-													 (params->tx.wfmt == XTRX_WF_12) ? XTRXLL_FE_12BIT : XTRXLL_FE_16BIT;
+					(params->tx.wfmt == XTRX_WF_12) ? XTRXLL_FE_12BIT : XTRXLL_FE_16BIT;
 		tx_stream_count = (tx_mode == XTRXLL_FE_MODE_SISO) ? 1 : 2;
 	}
 
