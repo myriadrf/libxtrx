@@ -241,6 +241,11 @@ public:
     unsigned transactSPI(const int addr, const unsigned data, const size_t numBits);
 
 private:
+	xtrx_channel_t to_xtrx_channels(const size_t channel) const;
+
+private:
+	enum { MAX_CHANNELS = 2 };
+
     mutable std::recursive_mutex _accessMutex;
 
 	xtrx_dev* _dev = NULL;
@@ -252,12 +257,14 @@ private:
 	xtrx_antenna_t _rx_ant = XTRX_RX_W;
 	double _actual_rf_tx = 0;
 	double _actual_rf_rx = 0;
+	double _actual_bb_tx = 0;
+	double _actual_bb_rx = 0;
 	double _actual_masterclock = 0;
 	double _actual_tx_rate = 0;
 	double _actual_rx_rate = 0;
 
-	double _actual_rx_bandwidth = 0;
-	double _actual_tx_bandwidth = 0;
+	double _actual_rx_bandwidth[MAX_CHANNELS] = {0};
+	double _actual_tx_bandwidth[MAX_CHANNELS] = {0};
 	enum stream_state_t {
 		SS_NONE,
 		SS_ALOCATED,

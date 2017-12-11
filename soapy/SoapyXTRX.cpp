@@ -381,7 +381,14 @@ void SoapyXTRX::setFrequency(const int direction, const size_t channel, const st
 	}
 	else if (name == "BB")
 	{
-		// TODO
+		if (direction == SOAPY_SDR_TX) {
+			res = xtrx_tune(_dev, XTRX_TUNE_BB_TX, frequency, &_actual_bb_tx);
+		} else {
+			res = xtrx_tune(_dev, XTRX_TUNE_BB_RX, frequency, &_actual_bb_rx);
+		}
+		if (res) {
+			throw std::runtime_error("SoapyXTRX::setFrequency("+name+") unable to tune!");
+		}
 		return;
 	}
 	throw std::runtime_error("SoapyXTRX::setFrequency("+name+") unknown name");
@@ -390,8 +397,6 @@ void SoapyXTRX::setFrequency(const int direction, const size_t channel, const st
 double SoapyXTRX::getFrequency(const int direction, const size_t /*channel*/, const std::string &name) const
 {
 	std::unique_lock<std::recursive_mutex> lock(_accessMutex);
-	//const auto lmsDir = (direction == SOAPY_SDR_TX)?LMS7002M::Tx:LMS7002M::Rx;
-
 	if (name == "RF")
 	{
 		if (direction == SOAPY_SDR_TX) {
@@ -402,8 +407,11 @@ double SoapyXTRX::getFrequency(const int direction, const size_t /*channel*/, co
 	}
 	else if (name == "BB")
 	{
-		// TODO
-		return 0;
+		if (direction == SOAPY_SDR_TX) {
+			return _actual_bb_tx;
+		} else {
+			return _actual_bb_rx;
+		}
 	}
 
 	throw std::runtime_error("SoapyXTRX::getFrequency("+name+") unknown name");
@@ -413,11 +421,11 @@ std::vector<std::string> SoapyXTRX::listFrequencies(const int /*direction*/, con
 {
 	std::vector<std::string> opts;
 	opts.push_back("RF");
-	//opts.push_back("BB");
+	opts.push_back("BB");
 	return opts;
 }
 
-SoapySDR::RangeList SoapyXTRX::getFrequencyRange(const int /*direction*/, const size_t /*channel*/, const std::string &name) const
+SoapySDR::RangeList SoapyXTRX::getFrequencyRange(const int direction, const size_t /*channel*/, const std::string &name) const
 {
 	std::unique_lock<std::recursive_mutex> lock(_accessMutex);
 	SoapySDR::RangeList ranges;
@@ -425,10 +433,15 @@ SoapySDR::RangeList SoapyXTRX::getFrequencyRange(const int /*direction*/, const 
 	{
 		ranges.push_back(SoapySDR::Range(30e6, 3.8e9));
 	}
-//	else if (name == "BB")
-//	{
-//		ranges.push_back(SoapySDR::Range(0, 0));
-//	}
+	else if (name == "BB")
+	{
+		uint64_t out = 0;
+		int res = xtrx_val_get(_dev, (SOAPY_SDR_TX) ? XTRX_TX : XTRX_RX, XTRX_CH_AB, XTRX_LMS7_DATA_RATE, &out);
+		if (res)
+			ranges.push_back(SoapySDR::Range(-0.0, 0.0));
+		else
+			ranges.push_back(SoapySDR::Range(-(double)out / 2, (double)out / 2));
+	}
 	return ranges;
 }
 
@@ -506,18 +519,15 @@ void SoapyXTRX::setBandwidth(const int direction, const size_t channel, const do
 
 	std::unique_lock<std::recursive_mutex> lock(_accessMutex);
 	SoapySDR::logf(SOAPY_SDR_DEBUG, "SoapyXTRX::setBandwidth(, %d, %g MHz)",  int(channel), bw/1e6);
-
-	xtrx_channel_t chan = (channel % 2) ? XTRX_CH_B : XTRX_CH_B;
-
-	//save dc offset mode
+	xtrx_channel_t chan = to_xtrx_channels(channel);
 
 	if (direction == SOAPY_SDR_RX)
 	{
-		xtrx_tune_rx_bandwidth(_dev, chan, bw, &_actual_rx_bandwidth);
+		xtrx_tune_rx_bandwidth(_dev, chan, bw, &_actual_rx_bandwidth[channel]);
 	}
 	else if (direction == SOAPY_SDR_TX)
 	{
-		xtrx_tune_tx_bandwidth(_dev, chan, bw, &_actual_tx_bandwidth);
+		xtrx_tune_tx_bandwidth(_dev, chan, bw, &_actual_tx_bandwidth[channel]);
 	}
 
 	//restore dc offset mode
@@ -526,13 +536,15 @@ void SoapyXTRX::setBandwidth(const int direction, const size_t channel, const do
 double SoapyXTRX::getBandwidth(const int direction, const size_t channel) const
 {
 	std::unique_lock<std::recursive_mutex> lock(_accessMutex);
+	/*xtrx_channel_t chan = */to_xtrx_channels(channel);
+
 	if (direction == SOAPY_SDR_RX)
 	{
-		return _actual_rx_bandwidth;
+		return _actual_rx_bandwidth[channel];
 	}
 	else if (direction == SOAPY_SDR_TX)
 	{
-		return _actual_tx_bandwidth;
+		return _actual_tx_bandwidth[channel];
 	}
 
 	return 0;
@@ -616,6 +628,7 @@ std::vector<std::string> SoapyXTRX::listSensors(void) const
 	std::vector<std::string> sensors;
 	sensors.push_back("clock_locked");
 	sensors.push_back("lms7_temp");
+	sensors.push_back("board_temp");
 	return sensors;
 }
 
@@ -639,16 +652,38 @@ SoapySDR::ArgInfo SoapyXTRX::getSensorInfo(const std::string &name) const
 		info.units = "C";
 		info.description = "The temperature of the LMS7002M in degrees C.";
 	}
+	else if (name == "board_temp")
+	{
+		info.key = "board_temp";
+		info.name = "XTRX board temerature";
+		info.type = SoapySDR::ArgInfo::FLOAT;
+		info.value = "0.0";
+		info.units = "C";
+		info.description = "The temperature of the XTRX board in degrees C.";
+	}
 	return info;
 }
 
 std::string SoapyXTRX::readSensor(const std::string &name) const
 {
 	std::unique_lock<std::recursive_mutex> lock(_accessMutex);
-
+	int res = 0;
+	uint64_t val;
 	if (name == "clock_locked")
 	{
 		return "true";
+	}
+	else if (name == "lms7_temp")
+	{
+		return "0.0";
+	}
+	else if (name == "board_temp")
+	{
+		res = xtrx_val_get(_dev, XTRX_TRX, XTRX_CH_AB, XTRX_BOARD_TEMP, &val);
+		if (res)
+			throw std::runtime_error("SoapyXTRX::readSensor("+name+") error: " + std::to_string(res));
+
+		return std::to_string(val / 256.0);
 	}
 
 	throw std::runtime_error("SoapyXTRX::readSensor("+name+") - unknown sensor name");
@@ -1120,4 +1155,14 @@ int SoapyXTRX::readStreamStatus(
 	(void)timeoutUs;
 
 	return SOAPY_SDR_TIMEOUT; //SOAPY_SDR_NOT_SUPPORTED;
+}
+
+xtrx_channel_t SoapyXTRX::to_xtrx_channels(const size_t channel) const
+{
+	if (channel == 0)
+		return XTRX_CH_A;
+	else if (channel == 1)
+		return XTRX_CH_B;
+	else
+		throw std::runtime_error("SoapyXTRX: incorret number of channel provided");
 }

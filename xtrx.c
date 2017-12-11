@@ -630,9 +630,10 @@ int xtrx_tune(struct xtrx_dev* dev, xtrx_tune_t type, double freq, double *actua
 	}
 
 	if (nco) {
+		double rel_freq;
 		if (dir == LMS_TX) {
 			double tx_dac_freq = dev->masterclock / dev->txcgen_div;
-			double rel_freq = freq / tx_dac_freq;
+			rel_freq = freq / tx_dac_freq;
 			if (rel_freq > 0.5 || rel_freq < -0.5) {
 				XTRXLL_LOG(XTRXLL_WARNING,
 						   "NCO TX ouf of range, requested %.3f while DAC %.3f\n",
@@ -642,15 +643,17 @@ int xtrx_tune(struct xtrx_dev* dev, xtrx_tune_t type, double freq, double *actua
 			LMS7002M_txtsp_set_freq(dev->lmsdrv[i].lms7, LMS_CHAB, rel_freq);
 		} else {
 			double rx_dac_freq = dev->masterclock / dev->rxcgen_div;
-			double rel_freq = -freq / rx_dac_freq;
+			rel_freq = freq / rx_dac_freq;
 			if (rel_freq > 0.5 || rel_freq < -0.5) {
 				XTRXLL_LOG(XTRXLL_WARNING,
 						   "NCO RX ouf of range, requested %.3f (%.3f kHz) while ADC %.3f kHz\n",
 						   rel_freq, freq / 1000, rx_dac_freq / 1000);
 				return -EINVAL;
 			}
-			LMS7002M_rxtsp_set_freq(dev->lmsdrv[i].lms7, LMS_CHAB, rel_freq);
+			LMS7002M_rxtsp_set_freq(dev->lmsdrv[i].lms7, LMS_CHAB, -rel_freq);
 		}
+		if (actualfreq)
+			*actualfreq = rel_freq;
 		return 0;
 	}
 
@@ -1832,14 +1835,20 @@ int xtrx_val_set(struct xtrx_dev* dev, xtrx_direction_t dir,
 				 xtrx_channel_t chan, xtrx_val_t type, uint64_t val)
 {
 	const int i = 0;
+	LMS7002M_chan_t lmsch;
+	int res;
 
 	switch (type) {
 	case XTRX_LMS7_XSP_DC_IQ:
+		res = xtrx_channel_to_lms7(chan, &lmsch);
+		if (res)
+			return res;
+
 		if (dir & XTRX_TX)
-			LMS7002M_txtsp_tsg_const(dev->lmsdrv[i].lms7, chan,
+			LMS7002M_txtsp_tsg_const(dev->lmsdrv[i].lms7, lmsch,
 									 val & 0xffff, (val >> 16) & 0xffff);
 		if (dir & XTRX_RX)
-			LMS7002M_rxtsp_tsg_const(dev->lmsdrv[i].lms7, chan,
+			LMS7002M_rxtsp_tsg_const(dev->lmsdrv[i].lms7, lmsch,
 									 val & 0xffff, (val >> 16) & 0xffff);
 		return 0;
 	case XTRX_VCTCXO_DAC_VAL:
@@ -1854,6 +1863,7 @@ XTRX_API int xtrx_val_get(struct xtrx_dev* dev, xtrx_direction_t dir,
 {
 	int res, val;
 	const int i = 0;
+	LMS7002M_chan_t lmsch;
 
 	switch (type) {
 	case XTRX_BOARD_TEMP:
@@ -1869,7 +1879,20 @@ XTRX_API int xtrx_val_get(struct xtrx_dev* dev, xtrx_direction_t dir,
 		}
 		return res;
 	case XTRX_LMS7_RSSI:
-		*oval = LMS7002M_rxtsp_read_rssi(dev->lmsdrv[i].lms7, chan);
+		res = xtrx_channel_to_lms7(chan, &lmsch);
+		if (res)
+			return res;
+
+		*oval = LMS7002M_rxtsp_read_rssi(dev->lmsdrv[i].lms7, lmsch);
+		return 0;
+	case XTRX_LMS7_DATA_RATE:
+		if (dir == XTRX_RX) {
+			*oval = (uint64_t)dev->masterclock / dev->rxcgen_div;
+		} else if (dir == XTRX_RX) {
+			*oval = (uint64_t)dev->masterclock / dev->txcgen_div;
+		} else {
+			return -EINVAL;
+		}
 		return 0;
 	default:
 		return -EINVAL;

@@ -351,12 +351,15 @@ typedef enum xtrx_val {
 	XTRX_LMS7_XSP_SIGNAL = 0x1700,
 	XTRX_LMS7_XSP_DC_IQ,
 	XTRX_LMS7_RSSI,
+	XTRX_LMS7_TEMP,
+	XTRX_LMS7_DATA_RATE, /**< TSP/RSP data rate for DAC/ADC */
 
 	/* Internal device, xtrx_direction_t should be set to 0 */
 	XTRX_VCTCXO_DAC_VAL = 0x2000,
 	XTRX_BOARD_TEMP,
 	XTRX_IC_TEMP,
 	XTRX_OSC_LATCH_1PPS,
+	XTRX_REF_XO_DAC,
 
 	/* Performance counters */
 	XTRX_PERF_SAMPLES = 0x3000,
