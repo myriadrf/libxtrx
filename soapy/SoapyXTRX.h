@@ -265,6 +265,11 @@ private:
 
 	double _actual_rx_bandwidth[MAX_CHANNELS] = {0};
 	double _actual_tx_bandwidth[MAX_CHANNELS] = {0};
+	double _actual_rx_gain_lna[MAX_CHANNELS] = {0};
+	double _actual_rx_gain_tia[MAX_CHANNELS] = {0};
+	double _actual_rx_gain_pga[MAX_CHANNELS] = {0};
+	double _actual_tx_gain_pad[MAX_CHANNELS] = {0};
+
 	enum stream_state_t {
 		SS_NONE,
 		SS_ALOCATED,

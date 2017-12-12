@@ -22,10 +22,13 @@ SoapyXTRX::SoapyXTRX(const SoapySDR::Kwargs &args)
 	SoapySDR::logf(SOAPY_SDR_INFO, "Make connection: ''");
 
 	//xtrx_set_logfunction(&SoapyXTRX::xtrx_logfunc);
-
+	unsigned loglevel = 3;
 	const std::string& dev = args.at("dev");
+	if (args.count("loglvl")) {
+		loglevel = std::stoi(args.at("loglvl"));
+	}
 
-	int res = xtrx_open(dev.c_str(), 4, &_dev);
+	int res = xtrx_open(dev.c_str(), loglevel, &_dev);
 	if (res)
 		throw std::runtime_error("SoapyXTRX::SoapyXTRX("+dev+") - unable to open the device");
 
@@ -256,30 +259,28 @@ void SoapyXTRX::setGain(const int direction, const size_t channel, const std::st
 	std::unique_lock<std::recursive_mutex> lock(_accessMutex);
 	SoapySDR::logf(SOAPY_SDR_DEBUG, "SoapyXTRX::setGain(, %d, %s, %g dB)", int(channel), name.c_str(), value);
 
-	xtrx_channel_t chan = (channel % 2) ? XTRX_CH_B : XTRX_CH_B;
-	double actual;
-
+	xtrx_channel_t chan = to_xtrx_channels(channel);
 	if (direction == SOAPY_SDR_RX and name == "LNA")
 	{
-		xtrx_set_gain(_dev, chan, XTRX_RX_LNA_GAIN, value, &actual);
+		xtrx_set_gain(_dev, chan, XTRX_RX_LNA_GAIN, value, &_actual_rx_gain_lna[channel]);
 		return;
 	}
 
 	else if (direction == SOAPY_SDR_RX and name == "TIA")
 	{
-		xtrx_set_gain(_dev, chan, XTRX_RX_TIA_GAIN, value, &actual);
+		xtrx_set_gain(_dev, chan, XTRX_RX_TIA_GAIN, value, &_actual_rx_gain_tia[channel]);
 		return;
 	}
 
 	else if (direction == SOAPY_SDR_RX and name == "PGA")
 	{
-		xtrx_set_gain(_dev, chan, XTRX_RX_PGA_GAIN, value, &actual);
+		xtrx_set_gain(_dev, chan, XTRX_RX_PGA_GAIN, value, &_actual_rx_gain_pga[channel]);
 		return;
 	}
 
 	else if (direction == SOAPY_SDR_TX and name == "PAD")
 	{
-		xtrx_set_gain(_dev, chan, XTRX_TX_PAD_GAIN, value, &actual);
+		xtrx_set_gain(_dev, chan, XTRX_TX_PAD_GAIN, value, &_actual_tx_gain_pad[channel]);
 	}
 
 	else throw std::runtime_error("SoapyXTRX::setGain("+name+") - unknown gain name");
@@ -290,30 +291,26 @@ void SoapyXTRX::setGain(const int direction, const size_t channel, const std::st
 double SoapyXTRX::getGain(const int direction, const size_t channel, const std::string &name) const
 {
 	std::unique_lock<std::recursive_mutex> lock(_accessMutex);
-	//xtrx_channel_t chan = (channel % 2) ? XTRX_CH_B : XTRX_CH_B;
+	to_xtrx_channels(channel);
 
 	if (direction == SOAPY_SDR_RX and name == "LNA")
 	{
-		return 0;
-		//return rfic->GetRFELNA_dB();
+		return _actual_rx_gain_lna[channel];
 	}
 
 	else if (direction == SOAPY_SDR_RX and name == "TIA")
 	{
-		return 0;
-		//return rfic->GetRFETIA_dB();
+		return _actual_rx_gain_tia[channel];
 	}
 
 	else if (direction == SOAPY_SDR_RX and name == "PGA")
 	{
-		return 0;
-		//return rfic->GetRBBPGA_dB();
+		return _actual_rx_gain_pga[channel];
 	}
 
 	else if (direction == SOAPY_SDR_TX and name == "PAD")
 	{
-		return 0;
-		//return rfic->GetTRFPAD_dB();
+		return _actual_tx_gain_pad[channel];
 	}
 
 	else throw std::runtime_error("SoapyXTRX::getGain("+name+") - unknown gain name");
@@ -1002,7 +999,7 @@ int SoapyXTRX::activateStream(
 		if (flags & SOAPY_SDR_HAS_TIME) {
 			_stream_params.rx_stream_start = (master_ts)SoapySDR::timeNsToTicks(timeNs, _actual_rx_rate);
 		} else {
-			_stream_params.rx_stream_start = 4096*1024;
+			_stream_params.rx_stream_start = 4096;
 		}
 		_stream_params.rx.paketsize = (uint16_t)numElems;
 		_stream_params.dir = XTRX_RX;

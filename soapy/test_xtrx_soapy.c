@@ -26,7 +26,7 @@ int main(void)
     SoapySDRKwargs args = {};
     SoapySDRKwargs_set(&args, "driver", "xtrx");
     SoapySDRKwargs_set(&args, "refclk", "26000000");
-    SoapySDRKwargs_set(&args, "loglvl", "8");
+    SoapySDRKwargs_set(&args, "loglvl", "2");
     SoapySDRDevice *sdr = SoapySDRDevice_make(&args);
     SoapySDRKwargs_clear(&args);
 
@@ -89,6 +89,14 @@ int main(void)
     //shutdown the stream
     SoapySDRDevice_deactivateStream(sdr, rxStream, 0, 0); //stop streaming
     SoapySDRDevice_closeStream(sdr, rxStream);
+
+    char** sensors = SoapySDRDevice_listSensors(sdr, &length);
+    for (size_t i = 0; i < length; i++)  {
+        SoapySDRArgInfo nfo = SoapySDRDevice_getSensorInfo(sdr, sensors[i]);
+
+        printf("Sensor %d [%-16s]: %-24s (%-48s): %s\n", (int)i, nfo.key, nfo.name, nfo.description,
+               SoapySDRDevice_readSensor(sdr, nfo.key));
+    }
 
     //cleanup device handle
     SoapySDRDevice_unmake(sdr);

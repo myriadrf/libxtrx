@@ -308,6 +308,7 @@ int main(int argc, char** argv)
 	unsigned rx_skip = 0;
 	unsigned logp = 0;
 	double master_in = 0;
+	int extclk = 0;
 	init_buf();
 
 
@@ -319,6 +320,7 @@ int main(int argc, char** argv)
 	{"txrepeat",no_argument,       0,   'R' },
 	{"rxlfsr",  no_argument,       0,   'r' },
 	{"mimomode",no_argument,       0,   'M' },
+	{"extclk",  no_argument,       0,   'm' },
 	{"loglevel",required_argument, 0,   'l' },
 	{"logp",    required_argument, 0,   'L' },
 	{"dumpregs",no_argument,       0,   'd' },
@@ -382,6 +384,7 @@ int main(int argc, char** argv)
 		case 'R':	tx_repeat_mode = 1;			break;
 		case 'r': rxlfsr = 1;					break;
 		case 'M':	mimomode = 1;				break;
+		case 'm':	extclk = 1;					break;
 		case 'l':	loglevel = (atoi(optarg));	break;
 		case 'L': logp = (atoi(optarg));		break;
 		case 'd':	dump_regs = 1;				break;
@@ -495,8 +498,8 @@ int main(int argc, char** argv)
 		goto falied_open;
 	}
 
-	if (refclk) {
-		xtrx_set_ref_clk(dev, refclk, XTRX_CLKSRC_INT);
+	if (refclk || extclk) {
+		xtrx_set_ref_clk(dev, refclk, (extclk) ? XTRX_CLKSRC_EXT : XTRX_CLKSRC_INT);
 	}
 
 	double master;

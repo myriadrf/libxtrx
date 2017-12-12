@@ -367,6 +367,17 @@ int xtrx_set_samplerate(struct xtrx_dev* dev,
 	unsigned tx_host_mul = 1;
 	unsigned rx_host_div = 1;
 
+	if (dev->clock_source) {
+		XTRXLL_LOG(XTRXLL_ERROR, "CLK TYPE: %d\n", dev->clock_source);
+		res = xtrxll_lms7_pwr_ctrl(dev->lldev, (1 << dev->lmsnum) - 1,
+								   XTRXLL_LMS7_GPWR_PIN | XTRXLL_LMS7_RESET_PIN |
+								   ((dev->clock_source == XTRX_CLKSRC_EXT) ? XTRXLL_EXT_CLK : 0) |
+								   ((1) ? XTRXLL_LMS7_RXEN_PIN : 0) |
+								   ((1) ? XTRXLL_LMS7_TXEN_PIN : 0));
+
+		usleep(1000000);
+	}
+
 	if (dev->refclock == 0) {
 		// Determine refclk
 		int osc, i;
@@ -590,6 +601,7 @@ int xtrx_set_samplerate(struct xtrx_dev* dev,
 	//rxrate = txrate = 1; //FIXME TODO Need tx for filer tunning
 	res = xtrxll_lms7_pwr_ctrl(dev->lldev, (1 << dev->lmsnum) - 1,
 							   XTRXLL_LMS7_GPWR_PIN | XTRXLL_LMS7_RESET_PIN |
+							   ((dev->clock_source == XTRX_CLKSRC_EXT) ? XTRXLL_EXT_CLK : 0) |
 							   ((1) ? XTRXLL_LMS7_RXEN_PIN : 0) |
 							   ((1) ? XTRXLL_LMS7_TXEN_PIN : 0) |
 							   ((rx_trxiq) ? XTRXLL_LMS7_RX_TRXIQ : 0) |
@@ -1839,6 +1851,10 @@ int xtrx_val_set(struct xtrx_dev* dev, xtrx_direction_t dir,
 	int res;
 
 	switch (type) {
+	case XTRX_LMS7_PWR_MODE:
+		XTRXLL_LOG(XTRXLL_INFO, "Set LMS7 power mode to %d\n", (int)val);
+		return xtrxll_set_param(dev->lldev, XTRXLL_PARAM_PWR_MODE, val);
+
 	case XTRX_LMS7_XSP_DC_IQ:
 		res = xtrx_channel_to_lms7(chan, &lmsch);
 		if (res)
