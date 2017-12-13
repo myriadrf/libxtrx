@@ -1905,7 +1905,7 @@ XTRX_API int xtrx_val_get(struct xtrx_dev* dev, xtrx_direction_t dir,
 	case XTRX_LMS7_DATA_RATE:
 		if (dir == XTRX_RX) {
 			*oval = (uint64_t)dev->masterclock / dev->rxcgen_div;
-		} else if (dir == XTRX_RX) {
+		} else if (dir == XTRX_TX) {
 			*oval = (uint64_t)dev->masterclock / dev->txcgen_div;
 		} else {
 			return -EINVAL;
