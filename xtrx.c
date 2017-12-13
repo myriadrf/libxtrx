@@ -1911,6 +1911,18 @@ XTRX_API int xtrx_val_get(struct xtrx_dev* dev, xtrx_direction_t dir,
 			return -EINVAL;
 		}
 		return 0;
+	case XTRX_PERF_LLFIFO:
+		if (dir == XTRX_RX) {
+			res = xtrxll_get_sensor(dev->lldev, XTRXLL_DMABUF_RXST64K, &val);
+		} else if (dir == XTRX_TX) {
+			res = xtrxll_get_sensor(dev->lldev, XTRXLL_DMABUF_TXST64K, &val);
+		} else {
+			return -EINVAL;
+		}
+		if (!res) {
+			*oval = val;
+		}
+		return res;
 	default:
 		return -EINVAL;
 	}

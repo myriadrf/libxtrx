@@ -365,6 +365,7 @@ typedef enum xtrx_val {
 	/* Performance counters */
 	XTRX_PERF_SAMPLES = 0x3000,
 	XTRX_PERF_UNOVFLOW,
+	XTRX_PERF_LLFIFO,
 
 	/* Direct access to RFIC regs, xtrx_direction_t ignored and chan
 	 *  is used as index to RFIC onboard */
