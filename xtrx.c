@@ -1635,8 +1635,9 @@ int xtrx_recv_sync_ex(struct xtrx_dev* dev, xtrx_recv_ex_info_t* info)
 
 					xtrxll_dma_rx_resume_at(dev->lldev, chan, dev->rxbuf_ts);
 					continue;
+				case -EINTR: /* operation was cancelled */
 				case -EAGAIN:
-					return -EAGAIN;
+					return res;
 				case 0:
 					goto got_buffer;
 
@@ -1730,7 +1731,7 @@ got_buffer:
 
 		if (dev->rxbuf_ts + dev->rxbuf_processed_ts > dev->rx_samples) {
 			for (i = 0; i < info->buffer_count; i++) {
-				memset(dst_buf[i], 0, user_processed / info->buffer_count);
+				memset(dst_buf[i], 0, user_cur_proceesed / info->buffer_count);
 			}
 			info->out_events |= RCVEX_EVENT_FILLED_ZERO;
 		} else {
