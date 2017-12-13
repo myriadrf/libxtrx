@@ -880,14 +880,13 @@ SoapySDR::ArgInfoList SoapyXTRX::getStreamArgsInfo(const int direction, const si
 {
 	SoapySDR::ArgInfoList argInfos;
 
-	//buffer length
+	//float scale
 	{
 		SoapySDR::ArgInfo info;
-		info.key = "bufferLength";
-		info.name = "Buffer Length";
-		info.description = "The buffer transfer size over the link.";
-		info.units = "samples";
-		info.type = SoapySDR::ArgInfo::INT;
+		info.key = "floatScale";
+		info.name = "Float Scale";
+		info.description = "The buffer will be scaled (or expected to be scaled) to [-floatScale;floatScale)";
+		info.type = SoapySDR::ArgInfo::FLOAT;
 		argInfos.push_back(info);
 	}
 
@@ -925,7 +924,7 @@ SoapySDR::Stream *SoapyXTRX::setupStream(
 		const int direction,
 		const std::string &format,
 		const std::vector<size_t> &channels,
-		const SoapySDR::Kwargs &/*args*/)
+		const SoapySDR::Kwargs &args)
 {
 	//TODO: multi stream
 	std::unique_lock<std::recursive_mutex> lock(_accessMutex);
@@ -956,10 +955,29 @@ SoapySDR::Stream *SoapyXTRX::setupStream(
 		throw std::runtime_error("SoapyXTRX::setupStream(?) unsupported direction");
 	}
 
+	xtrx_wire_format_t wfmt = XTRX_WF_16;
+	bool wfmt_given = false;
+	if (args.count("linkFormat")) {
+		const std::string& link_fmt = args.at("linkFormat");
+		if (link_fmt == "Complex int16") {
+			wfmt = XTRX_WF_16;
+		} else if (link_fmt == "Complex int12") {
+			wfmt = XTRX_WF_12;
+		} else if (link_fmt == "Complex int8") {
+			wfmt = XTRX_WF_8;
+		} else {
+			throw std::runtime_error("SoapyXTRX::setupStream([linkFormat="+link_fmt+"]) unsupported link format");
+		}
+		wfmt_given = true;
+	}
+
 	if (format == SOAPY_SDR_CF32) {
 		params->hfmt = XTRX_IQ_FLOAT32;
-		// TODO if
-		params->wfmt = XTRX_WF_16;
+		if (wfmt_given) {
+			params->wfmt = wfmt;
+		} else {
+			params->wfmt = XTRX_WF_16;
+		}
 	} else if (format == SOAPY_SDR_CS16) {
 		params->hfmt = XTRX_IQ_INT16;
 		params->wfmt = XTRX_WF_16;
@@ -972,6 +990,15 @@ SoapySDR::Stream *SoapyXTRX::setupStream(
 
 	params->flags = 0;
 	params->paketsize = 0;
+
+	if (args.count("floatScale")) {
+		const std::string& float_scale = args.at("floatScale");
+		params->scale = std::atof(float_scale.c_str());
+		if (params->scale <= 0) {
+			throw std::runtime_error("SoapyXTRX::setupStream([floatScale="+float_scale+") unsupported scale");
+		}
+		params->flags |= XTRX_RSP_SCALE;
+	}
 
 	if (num_channels == 1) {
 		params->flags |= XTRX_RSP_SISO_MODE;
