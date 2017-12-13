@@ -457,6 +457,7 @@ SoapySDR::RangeList SoapyXTRX::getFrequencyRange(const int /*direction*/, const 
 
 void SoapyXTRX::setSampleRate(const int direction, const size_t channel, const double rate)
 {
+	std::unique_lock<std::recursive_mutex> lock(_accessMutex);
 	SoapySDR::logf(SOAPY_SDR_DEBUG, "SoapyXTRX::setSampleRate(%d, %s, %g MHz)", int(channel), (direction == SOAPY_SDR_TX) ? "TX" : "RX", rate/1e6);
 	double master_clock;
 	if (direction == SOAPY_SDR_RX)
@@ -494,20 +495,20 @@ double SoapyXTRX::getSampleRate(const int direction, const size_t /*channel*/) c
 	return 0;
 }
 
-std::vector<double> SoapyXTRX::listSampleRates(const int /*direction*/, const size_t /*channel*/) const
+SoapySDR::RangeList SoapyXTRX::getSampleRateRange(const int direction, const size_t /*channel*/) const
 {
-	std::unique_lock<std::recursive_mutex> lock(_accessMutex);
-	std::vector<double> rates;
-
-	rates.push_back(2.1e6);
-	rates.push_back(56.25e6);
-
-	rates.push_back(61.4375e6);
-	rates.push_back(80e6);
-
-	return rates;
+	SoapySDR::RangeList ranges;
+	if (direction == SOAPY_SDR_TX)
+	{
+		ranges.push_back(SoapySDR::Range(2.1e6, 56.25e6));
+	}
+	else
+	{
+		ranges.push_back(SoapySDR::Range(0.2e6, 56.25e6));
+	}
+	ranges.push_back(SoapySDR::Range(61.4375e6, 80e6));
+	return ranges;
 }
-
 /*******************************************************************
  * Bandwidth API
  ******************************************************************/
