@@ -616,7 +616,23 @@ int xtrx_set_samplerate(struct xtrx_dev* dev,
 	return 0;
 }
 
+static int xtrx_channel_to_lms7(xtrx_channel_t xch, LMS7002M_chan_t* out)
+{
+	switch (xch) {
+	case XTRX_CH_A:  *out = LMS_CHA; break;
+	case XTRX_CH_B:  *out = LMS_CHB; break;
+	case XTRX_CH_AB: *out = LMS_CHAB; break;
+	default: return -EINVAL;
+	}
+	return 0;
+}
+
 int xtrx_tune(struct xtrx_dev* dev, xtrx_tune_t type, double freq, double *actualfreq)
+{
+	return xtrx_tune_ex(dev, type, XTRX_CH_AB, freq, actualfreq);
+}
+
+int xtrx_tune_ex(struct xtrx_dev* dev, xtrx_tune_t type, xtrx_channel_t ch, double freq, double *actualfreq)
 {
 	int i = 0, res;
 	LMS7002M_dir_t dir;
@@ -643,6 +659,11 @@ int xtrx_tune(struct xtrx_dev* dev, xtrx_tune_t type, double freq, double *actua
 
 	if (nco) {
 		double rel_freq;
+		LMS7002M_chan_t lmsch;
+		res = xtrx_channel_to_lms7(ch, &lmsch);
+		if (res)
+			return res;
+
 		if (dir == LMS_TX) {
 			double tx_dac_freq = dev->masterclock / dev->txcgen_div;
 			rel_freq = freq / tx_dac_freq;
@@ -652,7 +673,7 @@ int xtrx_tune(struct xtrx_dev* dev, xtrx_tune_t type, double freq, double *actua
 						   rel_freq / 1000, tx_dac_freq / 1000);
 				return -EINVAL;
 			}
-			LMS7002M_txtsp_set_freq(dev->lmsdrv[i].lms7, LMS_CHAB, rel_freq);
+			LMS7002M_txtsp_set_freq(dev->lmsdrv[i].lms7, lmsch, rel_freq);
 		} else {
 			double rx_dac_freq = dev->masterclock / dev->rxcgen_div;
 			rel_freq = freq / rx_dac_freq;
@@ -662,7 +683,7 @@ int xtrx_tune(struct xtrx_dev* dev, xtrx_tune_t type, double freq, double *actua
 						   rel_freq, freq / 1000, rx_dac_freq / 1000);
 				return -EINVAL;
 			}
-			LMS7002M_rxtsp_set_freq(dev->lmsdrv[i].lms7, LMS_CHAB, -rel_freq);
+			LMS7002M_rxtsp_set_freq(dev->lmsdrv[i].lms7, lmsch, -rel_freq);
 		}
 		if (actualfreq)
 			*actualfreq = rel_freq;
@@ -695,17 +716,6 @@ int xtrx_tune(struct xtrx_dev* dev, xtrx_tune_t type, double freq, double *actua
 	case 0: return 0;
 	default: return -EFAULT;
 	}
-}
-
-static int xtrx_channel_to_lms7(xtrx_channel_t xch, LMS7002M_chan_t* out)
-{
-	switch (xch) {
-	case XTRX_CH_A:  *out = LMS_CHA; break;
-	case XTRX_CH_B:  *out = LMS_CHB; break;
-	case XTRX_CH_AB: *out = LMS_CHAB; break;
-	default: return -EINVAL;
-	}
-	return 0;
 }
 
 static int xtrx_tune_bandwidth(struct xtrx_dev* dev, xtrx_channel_t xch, int rbb, double bw, double *actualbw)

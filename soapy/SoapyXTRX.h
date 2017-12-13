@@ -257,8 +257,8 @@ private:
 	xtrx_antenna_t _rx_ant = XTRX_RX_W;
 	double _actual_rf_tx = 0;
 	double _actual_rf_rx = 0;
-	double _actual_bb_tx = 0;
-	double _actual_bb_rx = 0;
+	double _actual_bb_tx[MAX_CHANNELS] = {0};
+	double _actual_bb_rx[MAX_CHANNELS] = {0};
 	double _actual_masterclock = 0;
 	double _actual_tx_rate = 0;
 	double _actual_rx_rate = 0;

@@ -356,6 +356,7 @@ SoapySDR::ArgInfoList SoapyXTRX::getFrequencyArgsInfo(const int direction, const
 
 void SoapyXTRX::setFrequency(const int direction, const size_t channel, const std::string &name, const double frequency, const SoapySDR::Kwargs &/*args*/)
 {
+	xtrx_channel_t chan = to_xtrx_channels(channel);
 	std::unique_lock<std::recursive_mutex> lock(_accessMutex);
 	SoapySDR::logf(SOAPY_SDR_DEBUG, "SoapyXTRX::setFrequency(, %d, %s, %g MHz)", int(channel), name.c_str(), frequency/1e6);
 	int res;
@@ -379,9 +380,9 @@ void SoapyXTRX::setFrequency(const int direction, const size_t channel, const st
 	else if (name == "BB")
 	{
 		if (direction == SOAPY_SDR_TX) {
-			res = xtrx_tune(_dev, XTRX_TUNE_BB_TX, frequency, &_actual_bb_tx);
+			res = xtrx_tune_ex(_dev, XTRX_TUNE_BB_TX, chan, frequency, &_actual_bb_tx[channel]);
 		} else {
-			res = xtrx_tune(_dev, XTRX_TUNE_BB_RX, frequency, &_actual_bb_rx);
+			res = xtrx_tune_ex(_dev, XTRX_TUNE_BB_RX, chan, frequency, &_actual_bb_rx[channel]);
 		}
 		if (res) {
 			throw std::runtime_error("SoapyXTRX::setFrequency("+name+") unable to tune!");
@@ -391,8 +392,9 @@ void SoapyXTRX::setFrequency(const int direction, const size_t channel, const st
 	throw std::runtime_error("SoapyXTRX::setFrequency("+name+") unknown name");
 }
 
-double SoapyXTRX::getFrequency(const int direction, const size_t /*channel*/, const std::string &name) const
+double SoapyXTRX::getFrequency(const int direction, const size_t channel, const std::string &name) const
 {
+	to_xtrx_channels(channel);
 	std::unique_lock<std::recursive_mutex> lock(_accessMutex);
 	if (name == "RF")
 	{
@@ -405,9 +407,9 @@ double SoapyXTRX::getFrequency(const int direction, const size_t /*channel*/, co
 	else if (name == "BB")
 	{
 		if (direction == SOAPY_SDR_TX) {
-			return _actual_bb_tx;
+			return _actual_bb_tx[channel];
 		} else {
-			return _actual_bb_rx;
+			return _actual_bb_rx[channel];
 		}
 	}
 
@@ -433,7 +435,7 @@ SoapySDR::RangeList SoapyXTRX::getFrequencyRange(const int direction, const size
 	else if (name == "BB")
 	{
 		uint64_t out = 0;
-		int res = xtrx_val_get(_dev, (SOAPY_SDR_TX) ? XTRX_TX : XTRX_RX, XTRX_CH_AB, XTRX_LMS7_DATA_RATE, &out);
+		int res = xtrx_val_get(_dev, (direction == SOAPY_SDR_TX) ? XTRX_TX : XTRX_RX, XTRX_CH_AB, XTRX_LMS7_DATA_RATE, &out);
 		if (res)
 			ranges.push_back(SoapySDR::Range(-0.0, 0.0));
 		else

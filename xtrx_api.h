@@ -122,6 +122,14 @@ XTRX_API int xtrx_set_samplerate(struct xtrx_dev* dev, double cgen_rate, double 
 								 double txrate, unsigned flags, double* actualcgen, double* actualrx,
 								 double* actualtx);
 
+
+typedef enum xtrx_channel {
+	XTRX_CH_A  = 1,
+	XTRX_CH_B  = 2,
+	XTRX_CH_AB = XTRX_CH_A | XTRX_CH_B,
+} xtrx_channel_t;
+
+
 typedef enum xtrx_tune {
 	XTRX_TUNE_RX_FDD,
 	XTRX_TUNE_TX_FDD,
@@ -135,13 +143,8 @@ typedef enum xtrx_tune {
 } xtrx_tune_t;
 
 XTRX_API int xtrx_tune(struct xtrx_dev* dev, xtrx_tune_t type, double freq, double *actualfreq);
+XTRX_API int xtrx_tune_ex(struct xtrx_dev* dev, xtrx_tune_t type, xtrx_channel_t ch, double freq, double *actualfreq);
 
-
-typedef enum xtrx_channel {
-	XTRX_CH_A  = 1,
-	XTRX_CH_B  = 2,
-	XTRX_CH_AB = XTRX_CH_A | XTRX_CH_B,
-} xtrx_channel_t;
 
 /**< Tune filter for specific bandwidth
  *
