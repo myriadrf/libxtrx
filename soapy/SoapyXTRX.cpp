@@ -550,7 +550,7 @@ double SoapyXTRX::getBandwidth(const int direction, const size_t channel) const
 	return 0;
 }
 
-SoapySDR::RangeList SoapyXTRX::getBandwidthRange(const int direction, const size_t channel) const
+SoapySDR::RangeList SoapyXTRX::getBandwidthRange(const int direction, const size_t /*channel*/) const
 {
 	SoapySDR::RangeList bws;
 
@@ -789,7 +789,7 @@ SoapySDR::ArgInfoList SoapyXTRX::getSettingInfo(void) const
 	return infos;
 }
 
-void SoapyXTRX::writeSetting(const std::string &key, const std::string &value)
+void SoapyXTRX::writeSetting(const std::string &key, const std::string &/*value*/)
 {
 	throw std::runtime_error("unknown setting key: "+key);
 }
