@@ -1064,8 +1064,10 @@ int SoapyXTRX::activateStream(
 		if (_rx_stream != SS_ALOCATED)
 			throw std::runtime_error("SoapyXTRX::activateStream() - RX stream isn't allocated!");
 
-		if (_actual_rx_rate < 1)
-			throw std::runtime_error("SoapyXTRX::activateStream() - the RX sample rate has not been configured!");
+		if (_actual_rx_rate < 1) {
+			//throw std::runtime_error("SoapyXTRX::activateStream() - the RX sample rate has not been configured!");
+			setSampleRate(SOAPY_SDR_RX, 0, 2.1e6);
+		}
 
 		if (flags & SOAPY_SDR_HAS_TIME) {
 			_stream_params.rx_stream_start = (master_ts)SoapySDR::timeNsToTicks(timeNs, _actual_rx_rate);
