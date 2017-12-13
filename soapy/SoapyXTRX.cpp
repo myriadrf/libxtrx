@@ -575,13 +575,54 @@ void SoapyXTRX::setMasterClockRate(const double rate)
 	std::unique_lock<std::recursive_mutex> lock(_accessMutex);
 	_ref_clk = rate;
 
-	xtrx_set_ref_clk(_dev, rate, XTRX_CLKSRC_INT);
+	xtrx_set_ref_clk(_dev, _ref_clk, _ref_source);
+
+	// TODO: get reference clock in case of autodetection
 }
 
 double SoapyXTRX::getMasterClockRate(void) const
 {
 	std::unique_lock<std::recursive_mutex> lock(_accessMutex);
 	return _ref_clk;
+}
+
+SoapySDR::RangeList SoapyXTRX::getMasterClockRates(void) const
+{
+	SoapySDR::RangeList clks;
+	clks.push_back(SoapySDR::Range(0, 0)); // means autodetect
+	clks.push_back(SoapySDR::Range(10e6, 52e6));
+	return clks;
+}
+
+std::vector<std::string> SoapyXTRX::listClockSources(void) const
+{
+	return { "internal", "extrernal", "ext+pps" };
+}
+
+void SoapyXTRX::setClockSource(const std::string &source)
+{
+	std::unique_lock<std::recursive_mutex> lock(_accessMutex);
+	if (source == "internal")
+		_ref_source = XTRX_CLKSRC_INT;
+	else if (source == "extrernal")
+		_ref_source = XTRX_CLKSRC_EXT;
+	else if (source == "ext+pps")
+		_ref_source = XTRX_CLKSRC_EXT_W1PPS_SYNC;
+	else
+		return;
+
+	xtrx_set_ref_clk(_dev, _ref_clk, _ref_source);
+}
+
+std::string SoapyXTRX::getClockSource(void) const
+{
+	switch (_ref_source) {
+	case XTRX_CLKSRC_INT: return "internal";
+	case XTRX_CLKSRC_EXT: return "extrernal";
+	case XTRX_CLKSRC_EXT_W1PPS_SYNC: return "ext+pps";
+	}
+
+	return "<unknown>";
 }
 
 /*******************************************************************

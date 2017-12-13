@@ -180,6 +180,14 @@ public:
 
     double getMasterClockRate(void) const;
 
+    SoapySDR::RangeList getMasterClockRates(void) const;
+
+    std::vector<std::string> listClockSources(void) const;
+
+    void setClockSource(const std::string &source);
+
+    std::string getClockSource(void) const;
+
     /*******************************************************************
      * Time API
      ******************************************************************/
@@ -283,6 +291,7 @@ private:
 	size_t _tx_channels = 0;
 
 	double _ref_clk = 30.72e6;
+	xtrx_clock_source_t _ref_source = XTRX_CLKSRC_INT;
 
 	xtrx_run_params_t _stream_params;
 
