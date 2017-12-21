@@ -7,6 +7,7 @@
 #include <SoapySDR/Formats.hpp>
 #include <cstdlib>
 #include <algorithm>
+#include <cmath>
 
 
 void SoapyXTRX::xtrx_logfunc(int sevirity, const char* message)
@@ -19,10 +20,16 @@ void SoapyXTRX::xtrx_logfunc(int sevirity, const char* message)
 
 SoapyXTRX::SoapyXTRX(const SoapySDR::Kwargs &args)
 {
-	SoapySDR::logf(SOAPY_SDR_INFO, "Make connection: ''");
+	SoapySDR::logf(SOAPY_SDR_INFO, "Make connection: '%s'", args.count("dev") ? args.at("dev").c_str() : "*");
 
 	//xtrx_set_logfunction(&SoapyXTRX::xtrx_logfunc);
 	unsigned loglevel = 3;
+#ifdef __linux
+	const char* lenv = getenv("SOAPY_XTRX_LOGLEVEL");
+	if (lenv) {
+		loglevel = atoi(lenv);
+	}
+#endif
 	const std::string& dev = args.at("dev");
 	if (args.count("loglvl")) {
 		loglevel = std::stoi(args.at("loglvl"));
@@ -260,7 +267,7 @@ void SoapyXTRX::setGain(const int direction, const size_t channel, const std::st
 	SoapySDR::logf(SOAPY_SDR_DEBUG, "SoapyXTRX::setGain(, %d, %s, %g dB)", int(channel), name.c_str(), value);
 
 	xtrx_channel_t chan = to_xtrx_channels(channel);
-	if (direction == SOAPY_SDR_RX and name == "LNA")
+    if (direction == SOAPY_SDR_RX and (name == "LNA" || name == "LB"))
 	{
 		xtrx_set_gain(_dev, chan, XTRX_RX_LNA_GAIN, value, &_actual_rx_gain_lna[channel]);
 		return;
@@ -293,7 +300,7 @@ double SoapyXTRX::getGain(const int direction, const size_t channel, const std::
 	std::unique_lock<std::recursive_mutex> lock(_accessMutex);
 	to_xtrx_channels(channel);
 
-	if (direction == SOAPY_SDR_RX and name == "LNA")
+    if (direction == SOAPY_SDR_RX and (name == "LNA" || name == "LB"))
 	{
 		return _actual_rx_gain_lna[channel];
 	}
@@ -463,13 +470,23 @@ void SoapyXTRX::setSampleRate(const int direction, const size_t channel, const d
 	if (direction == SOAPY_SDR_RX)
 	{
 		_tmp_rx = rate;
+		if (std::abs(_tmp_rx - _actual_rx_rate) < 10)
+			return;
 	}
 	else if (direction == SOAPY_SDR_TX)
 	{
 		_tmp_tx = rate;
+		if (std::abs(_tmp_tx - _actual_tx_rate) < 10)
+			return;
+	}
+	else
+	{
+		return;
 	}
 
-	int ret = xtrx_set_samplerate(_dev, 0, _tmp_rx, _tmp_tx, 0, &master_clock, &_actual_rx_rate, &_actual_tx_rate);
+	int ret = xtrx_set_samplerate(_dev, 0, _tmp_rx, _tmp_tx,
+								  0, //XTRX_SAMPLERATE_FORCE_UPDATE,
+								  &master_clock, &_actual_rx_rate, &_actual_tx_rate);
 
 	if (ret) {
 		SoapySDR::logf(SOAPY_SDR_ERROR, "SoapyXTRX::setSampleRate(%d, %s, %g MHz) - error %d",
@@ -508,6 +525,16 @@ SoapySDR::RangeList SoapyXTRX::getSampleRateRange(const int direction, const siz
 	}
 	ranges.push_back(SoapySDR::Range(61.4375e6, 80e6));
 	return ranges;
+}
+
+std::vector<double> SoapyXTRX::listSampleRates(const int direction, const size_t channel) const
+{
+	std::vector<double> rates;
+	for (int i = 2; i < 57; i++)
+	{
+		rates.push_back(i*1e6);
+	}
+	return rates;
 }
 /*******************************************************************
  * Bandwidth API
@@ -887,6 +914,7 @@ SoapySDR::ArgInfoList SoapyXTRX::getStreamArgsInfo(const int direction, const si
 		info.name = "Float Scale";
 		info.description = "The buffer will be scaled (or expected to be scaled) to [-floatScale;floatScale)";
 		info.type = SoapySDR::ArgInfo::FLOAT;
+		info.value = "1.0";
 		argInfos.push_back(info);
 	}
 
@@ -899,6 +927,7 @@ SoapySDR::ArgInfoList SoapyXTRX::getStreamArgsInfo(const int direction, const si
 		info.type = SoapySDR::ArgInfo::STRING;
 		info.options.push_back(SOAPY_SDR_CS16);
 		info.optionNames.push_back("Complex int16");
+		info.value = SOAPY_SDR_CS16;
 
 		if (direction == SOAPY_SDR_RX) {
 			info.options.push_back(SOAPY_SDR_CS8);
@@ -914,8 +943,8 @@ SoapySDR::ArgInfoList SoapyXTRX::getStreamArgsInfo(const int direction, const si
 	return argInfos;
 }
 
-#define STREAM_RX ((SoapySDR::Stream *)(uintptr_t(SOAPY_SDR_RX)))
-#define STREAM_TX ((SoapySDR::Stream *)(uintptr_t(SOAPY_SDR_TX)))
+#define STREAM_RX ((SoapySDR::Stream *)(uintptr_t(SOAPY_SDR_RX)+0x8000))
+#define STREAM_TX ((SoapySDR::Stream *)(uintptr_t(SOAPY_SDR_TX)+0x8000))
 
 /*******************************************************************
  * Stream config
@@ -959,11 +988,11 @@ SoapySDR::Stream *SoapyXTRX::setupStream(
 	bool wfmt_given = false;
 	if (args.count("linkFormat")) {
 		const std::string& link_fmt = args.at("linkFormat");
-		if (link_fmt == "Complex int16") {
+		if (link_fmt == SOAPY_SDR_CS16) {
 			wfmt = XTRX_WF_16;
-		} else if (link_fmt == "Complex int12") {
+		} else if (link_fmt == SOAPY_SDR_CS12) {
 			wfmt = XTRX_WF_12;
-		} else if (link_fmt == "Complex int8") {
+		} else if (link_fmt == SOAPY_SDR_CS8) {
 			wfmt = XTRX_WF_8;
 		} else {
 			throw std::runtime_error("SoapyXTRX::setupStream([linkFormat="+link_fmt+"]) unsupported link format");
@@ -1027,7 +1056,7 @@ SoapySDR::Stream *SoapyXTRX::setupStream(
 	if (direction == SOAPY_SDR_RX) {
 		_rx_stream = SS_ALOCATED;
 		return STREAM_RX;
-	} else  {
+	} else {
 		_tx_stream = SS_ALOCATED;
 		return STREAM_TX;
 	}

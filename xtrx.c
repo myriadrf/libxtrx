@@ -76,7 +76,7 @@ struct xtrx_multill_stream {
 
 struct xtrx_dev {
 	struct xtrxll_dev* lldev;
-	bool               uselms7_callib;
+	bool               fuselms7_callib;
 
 	int                lmsnum;
 	struct lms7_struct lmsdrv[MAX_LMS];
@@ -200,6 +200,26 @@ static int xtrx_init_lms(struct lms7_struct* lms)
 
 	return lms->lasterr;
 }
+
+
+int xtrx_discovery(xtrx_device_info_t* devs, size_t maxbuf)
+{
+	int res, i;
+	xtrxll_device_info_t lldevs[maxbuf];
+	res = xtrxll_discovery(lldevs, maxbuf);
+	if (res < 0)
+		return res;
+
+	for (i = 0; i < res; i++) {
+		strncpy(devs[i].uniqname, lldevs[i].uniqname, sizeof(devs[i].uniqname));
+		strncpy(devs[i].proto, lldevs[i].proto, sizeof(lldevs[i].proto));
+		strncpy(devs[i].speed, lldevs[i].busspeed, sizeof(lldevs[i].busspeed));
+		strncpy(devs[i].serial, "", sizeof(devs[i].serial)); // TODO
+		strncpy(devs[i].devid, "", sizeof(devs[i].devid));   // TODO
+	}
+	return res;
+}
+
 
 int xtrx_open(const char* device, unsigned flags, struct xtrx_dev** outdev)
 {
@@ -349,6 +369,8 @@ int xtrx_set_samplerate(struct xtrx_dev* dev,
 						double* actualrx,
 						double* actualtx)
 {
+	XTRXLL_LOG(XTRXLL_ERROR, "xtrx_set_samplerate\n");
+
 	int res = 0, i;
 	int rxdiv = 1;
 	int txdiv = 1;
@@ -356,9 +378,9 @@ int xtrx_set_samplerate(struct xtrx_dev* dev,
 	const unsigned adcdiv_fixed = 4;
 	const unsigned dacdiv       = 4;
 
-	const int rx_trxiq = (flags & 1) ? 0 : 1;
+	const int rx_trxiq = 0; //(flags & 1) ? 0 : 1;
 	const int rx_gen =   (flags & 2) ? 1 : 0;
-	const int rx_no_decim = ((flags & 4) && rx_gen) ? 1 : 0;
+	const int rx_no_decim = (((flags & 4) == 4) && rx_gen) ? 1 : 0;
 	const int tx_no_decim = ((flags & 8)) ? 1 : 0;
 	const int rx_delay = (flags >> 6) & 0x3f;
 
@@ -468,9 +490,8 @@ int xtrx_set_samplerate(struct xtrx_dev* dev,
 		return -EINVAL;
 	}
 
-	if ((dev->rx_run) && (
-				(dev->tx_host_inter != tx_host_mul) ||
-				(dev->rx_host_decim != rx_host_div))) {
+	if (((dev->rx_run) && (dev->rx_host_decim != rx_host_decim)) ||
+		((dev->tx_run) && (dev->tx_host_inter != tx_host_inter))) {
 		XTRXLL_LOG(XTRXLL_ERROR, "xtrx_set_samplerate: can't change extra host decimation when stream is running\n");
 		return -EINVAL;
 	}
@@ -525,28 +546,26 @@ int xtrx_set_samplerate(struct xtrx_dev* dev,
 			   mmcm_flag ? "MCLK2" : "MCLK1", tx_host_inter, rx_host_decim);
 
 	// TODO FIXME
-	if (dev->rx_run || dev->tx_run)
-		return res;
+	bool update_running = false;
+	if (dev->rx_run || dev->tx_run) {
+		if (~(flags & XTRX_SAMPLERATE_FORCE_UPDATE))
+			return res;
 
-	LMS7002M_reset(dev->lmsdrv[0].lms7);
-	usleep(10000);
-	LMS7002M_lml_en(dev->lmsdrv[0].lms7);
-
-	//LMS7002M_invert_fclk_ex(dev->lmsdrv[0].lms7, LML_TX_PORT, true);
-
-	if (!rx_trxiq) {
-		//LMS7002M_invert_fclk_ex(dev->lmsdrv[0].lms7, LML_RX_PORT, true);
-		LMS7002M_set_jesd207_latency(dev->lmsdrv[0].lms7, LML_RX_PORT, 0, 0);
+		update_running = true;
 	}
 
-	//LMS7002M_set_jesd207_latency(dev->lmsdrv[0].lms7, LML_TX_PORT, 0, 0);
+	if (!update_running) {
+		LMS7002M_reset(dev->lmsdrv[0].lms7);
+		usleep(10000);
+		LMS7002M_lml_en(dev->lmsdrv[0].lms7);
+	}
 
 	// 2. Set LML RX
 	if (rxrate > 0) {
 		for (i = 0; i < dev->lmsnum; ++i) {
 			LMS7002M_configure_lml_port(dev->lmsdrv[i].lms7,
 										LML_RX_PORT,
-										LMS_RX, // (rx_trxiq) ? LMS_RX : LMS_JESD207_RX,
+										LMS_RX,
 										(rxdiv > 1) ? (rxdiv / 2) : 1);
 
 			LMS7002M_invert_mclk_ex(dev->lmsdrv[i].lms7, LML_RX_PORT, rx_trxiq);
@@ -554,9 +573,12 @@ int xtrx_set_samplerate(struct xtrx_dev* dev,
 			if (rx_gen) {
 				//LMS7002M_configure_lml_port_rdfclk(dev->lmsdrv[i].lms7, LML_RX_PORT);
 			}
-			LMS7002M_set_diq_mux(dev->lmsdrv[i].lms7, LMS_RX, diqmap);
 
-			LMS7002M_rbb_enable(dev->lmsdrv[i].lms7, LMS_CHAB, true);
+			if (~dev->rx_run) {
+				LMS7002M_set_diq_mux(dev->lmsdrv[i].lms7, LMS_RX, diqmap);
+
+				LMS7002M_rbb_enable(dev->lmsdrv[i].lms7, LMS_CHAB, true);
+			}
 		}
 		if (actualrx) {
 			*actualrx =  actualmaster / rxdiv / adcdiv_fixed;
@@ -567,11 +589,13 @@ int xtrx_set_samplerate(struct xtrx_dev* dev,
 	for (i = 0; i < dev->lmsnum; ++i) {
 		LMS7002M_configure_lml_port(dev->lmsdrv[i].lms7,
 									LML_TX_PORT,
-									/*LMS_JESD207_TX*/ LMS_TX,
+									LMS_TX,
 									(txdiv > 1) ? (txdiv / 2) : 1);
 		LMS7002M_set_diq_mux(dev->lmsdrv[i].lms7, LMS_TX, diqmaptx);
 
-		LMS7002M_tbb_enable(dev->lmsdrv[i].lms7, LMS_CHAB, true);
+		if (~dev->tx_run) {
+			LMS7002M_tbb_enable(dev->lmsdrv[i].lms7, LMS_CHAB, true);
+		}
 	}
 	if (txrate > 1 || rx_gen) {
 		if (actualtx) {
@@ -607,6 +631,17 @@ int xtrx_set_samplerate(struct xtrx_dev* dev,
 							   ((rx_trxiq) ? XTRXLL_LMS7_RX_TRXIQ : 0) |
 							   ((rx_gen) ?   XTRXLL_LMS7_RX_GEN : 0));
 
+	if (rxrate > 1) {
+		if (rxrate < 30e6) {
+			res = xtrxll_set_param(dev->lldev, XTRXLL_PARAM_PWR_VIO, 1500);
+		} else if (rxrate > 1 && rxrate < 50e6) {
+			res = xtrxll_set_param(dev->lldev, XTRXLL_PARAM_PWR_VIO, 1800);
+		} else {
+			//res = xtrxll_set_param(dev->lldev, XTRXLL_PARAM_PWR_VIO, 1900);
+		}
+		if (res)
+			return res;
+	}
 
 	if (rxrate > 1 && rx_gen) {
 		LMS7002M_configure_lml_port_rdfclk(dev->lmsdrv[0].lms7, LML_RX_PORT);
@@ -1865,7 +1900,9 @@ int xtrx_val_set(struct xtrx_dev* dev, xtrx_direction_t dir,
 	case XTRX_LMS7_PWR_MODE:
 		XTRXLL_LOG(XTRXLL_INFO, "Set LMS7 power mode to %d\n", (int)val);
 		return xtrxll_set_param(dev->lldev, XTRXLL_PARAM_PWR_MODE, val);
-
+	case XTRX_LMS7_VIO:
+		XTRXLL_LOG(XTRXLL_INFO, "Set LMS7 VIO to %d\n", (int)val);
+		return xtrxll_set_param(dev->lldev, XTRXLL_PARAM_PWR_VIO, val);
 	case XTRX_LMS7_XSP_DC_IQ:
 		res = xtrx_channel_to_lms7(chan, &lmsch);
 		if (res)
@@ -1893,6 +1930,9 @@ XTRX_API int xtrx_val_get(struct xtrx_dev* dev, xtrx_direction_t dir,
 	LMS7002M_chan_t lmsch;
 
 	switch (type) {
+	case XTRX_UNDERLYING_LL:
+		*oval = (intptr_t)dev->lldev;
+		return 0;
 	case XTRX_BOARD_TEMP:
 		res = xtrxll_get_sensor(dev->lldev, XTRXLL_TEMP_SENSOR_CUR, &val);
 		if (!res) {

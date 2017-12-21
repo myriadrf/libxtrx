@@ -301,6 +301,7 @@ int main(int argc, char** argv)
 	int tx_tst_b = 0;
 	int tx_packet_size = 0;
 	int rx_packet_size = 0;
+	int vio = 0;
 
 	unsigned samples_flag = 0;
 	unsigned refclk = 0;
@@ -324,9 +325,11 @@ int main(int argc, char** argv)
 	{"loglevel",required_argument, 0,   'l' },
 	{"logp",    required_argument, 0,   'L' },
 	{"dumpregs",no_argument,       0,   'd' },
+	{"device",  required_argument, 0,   'D' },
 	{"samples", required_argument,  0,   'N' },
 	{"out",     required_argument,  0,   'O' },
 	{"master",  required_argument,  0,   'y' },
+	{"vio",     required_argument,  0,   'Y' },
 	// symmetric for RX & TX
 	{"txpkt",   required_argument, 0,   'Z' },
 	{"rxpkt",   required_argument, 0,   'z' },
@@ -388,6 +391,7 @@ int main(int argc, char** argv)
 		case 'l':	loglevel = (atoi(optarg));	break;
 		case 'L': logp = (atoi(optarg));		break;
 		case 'd':	dump_regs = 1;				break;
+		case 'D': device = optarg;				break;
 		case 'x':
 			switch (atoi(optarg)) {
 			case 8: rx_wire_fmt = XTRX_WF_8; break;
@@ -445,6 +449,7 @@ int main(int argc, char** argv)
 		case 'T':	dmatx = 1;					break;
 
 		case 'y': master_in = atof(optarg); break;
+		case 'Y': vio = atoi(optarg); break;
 		default: /* '?' */
 			fprintf(stderr, "Usage: %s <options>\n", argv[0]);
 			generate_help(long_options);
@@ -513,6 +518,10 @@ int main(int argc, char** argv)
 			master, actual_rxsample_rate, actual_txsample_rate);
 
 	s_actual_txsample_rate = actual_txsample_rate;
+
+	if (vio) {
+		xtrx_val_set(dev, XTRX_TRX, XTRX_CH_AB, XTRX_LMS7_VIO, vio);
+	}
 
 	if (dmarx) {
 		res = xtrx_tune(dev, XTRX_TUNE_RX_FDD, rxfreq, &rxactualfreq);
@@ -666,7 +675,7 @@ int main(int argc, char** argv)
 							dt, (int)((sa - dt) / 1000));
 				if (res) {
 					fprintf(stderr, "Failed xtrx_recv_sync: %d\n", res);
-					goto falied_stop;
+					goto falied_stop_rx;
 				}
 
 				if (ri.out_events & RCVEX_EVENT_OVERFLOW) {
@@ -675,6 +684,7 @@ int main(int argc, char** argv)
 				}
 			}
 		}
+falied_stop_rx:
 		tm = grtime() - st;
 		fprintf(stderr, "XXXXX Overruns:%d Zeros:%" PRIu64 "\n", overruns, zero_inserted);
 
@@ -723,9 +733,10 @@ int main(int argc, char** argv)
 
 		uint64_t sp = grtime();
 		uint64_t abpkt = sp;
+		uint64_t p;
 		fprintf(stderr, "TX SAMPLES=%" PRIu64 " SLICE=%u PARTS=%" PRIu64 "\n", samples, s_tx_slice, samples / s_tx_slice);
 		st = grtime();
-		for (uint64_t p = 0; p < cycles; p++) {
+		for (p = 0; p < cycles; p++) {
 			for (uint64_t h = 0; h < samples / s_tx_slice; h++) {
 				size_t rem = samples - h * s_tx_slice;
 				if (rem > s_tx_slice)
@@ -754,8 +765,8 @@ int main(int argc, char** argv)
 							' ',
 							sb / 1000, da / 1000, (int64_t)(sp - abpkt) / 1000, nfo.out_samples * nfo.buffer_count);
 				if (res) {
-					fprintf(stderr, "Failed xtrx_recv_sync: %d\n", res);
-					goto falied_stop;
+					fprintf(stderr, "Failed xtrx_send_sync_ex: %d\n", res);
+					goto falied_stop_tx;
 				}
 
 				//tx_sent_samples += nfo.out_samples * nfo.buffer_count / (tx_siso ? 1 : 2);
@@ -765,9 +776,10 @@ int main(int argc, char** argv)
 				}
 			}
 		}
+falied_stop_tx:
 		tm = grtime() - st;
 
-		s_tx_cycles = cycles * (samples / s_tx_slice);
+		s_tx_cycles = p * (samples / s_tx_slice);
 		s_tx_tm = tm;
 		fprintf(stderr, "TX Underruns:%" PRIu64 "\n", underruns);
 	}
@@ -785,6 +797,7 @@ int main(int argc, char** argv)
 	xtrx_stop(dev, dir);
 	xtrx_stop(dev, dir);
 	fprintf(stderr, "Success!\n");
+
 
 	unsigned rxchs = (rx_siso ? 1 : 2);
 	unsigned txchs = (tx_siso ? 1 : 2);
@@ -810,7 +823,7 @@ int main(int argc, char** argv)
 	xtrx_close(dev);
 	return 0;
 
-falied_stop:
+//falied_stop:
 	xtrx_stop(dev, XTRX_TRX);
 falied_tune:
 falied_samplerate:

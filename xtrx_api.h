@@ -90,9 +90,23 @@ typedef enum xtrx_clock_source {
 
 XTRX_API void xtrx_set_ref_clk(struct xtrx_dev* dev, unsigned refclkhz, xtrx_clock_source_t clksrc);
 
-/** NOT IMPLEMENTED
- */
-XTRX_API int xtrx_discovery(char* devices, size_t maxbuf);
+enum {
+	XTRX_DEVINFO_UNIQNAME_MAX = 64,
+	XTRX_PROTO_MAX = 16,
+	XTRX_SPEED_MAX = 16,
+	XTRX_SERIAL_MAX = 32,
+	XTRX_DEVID_MAX = 64,
+};
+
+typedef struct xtrx_device_info {
+	char uniqname[XTRX_DEVINFO_UNIQNAME_MAX];
+	char proto[XTRX_PROTO_MAX];
+	char speed[XTRX_SPEED_MAX];
+	char serial[XTRX_SERIAL_MAX];
+	char devid[XTRX_DEVID_MAX];
+} xtrx_device_info_t;
+
+XTRX_API int xtrx_discovery(xtrx_device_info_t* devs, size_t maxbuf);
 
 
 typedef enum xtrx_samplerate_flags {
@@ -100,6 +114,9 @@ typedef enum xtrx_samplerate_flags {
 
 	XTRX_SAMPLERATE_FORCE_TX_INTR = 16,
 	XTRX_SAMPLERATE_FORCE_RX_DECIM = 32,
+
+	/** Update samplerate at runtime, timing can't be kept precise */
+	XTRX_SAMPLERATE_FORCE_UPDATE = 128,
 } xtrx_samplerate_flags_t;
 
 /** Set samplerate for the XTRX device
@@ -345,6 +362,9 @@ XTRX_API int xtrx_recv_sync_ex(struct xtrx_dev* dev, xtrx_recv_ex_info_t* info);
 
 /* Low level calibration interface, statistics and hacking */
 typedef enum xtrx_val {
+	/* Underlying low-level object for internal testing */
+	XTRX_UNDERLYING_LL = 0,
+
 	/* RFIC specific calibration space */
 	XTRX_RFIC_CORR_DC_EN = 0x1000,
 	//XTRX_RFIC_CORR_DC_IQ,
@@ -357,6 +377,7 @@ typedef enum xtrx_val {
 	XTRX_LMS7_TEMP,
 	XTRX_LMS7_DATA_RATE, /**< TSP/RSP data rate for DAC/ADC */
 	XTRX_LMS7_PWR_MODE,
+	XTRX_LMS7_VIO,
 
 	/* Internal device, xtrx_direction_t should be set to 0 */
 	XTRX_VCTCXO_DAC_VAL = 0x2000,

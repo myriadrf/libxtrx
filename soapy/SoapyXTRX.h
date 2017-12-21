@@ -160,6 +160,8 @@ public:
 
     SoapySDR::RangeList getSampleRateRange(const int direction, const size_t channel) const;
 
+    std::vector<double> listSampleRates(const int direction, const size_t channel) const;
+
     /*******************************************************************
      * Bandwidth API
      ******************************************************************/
