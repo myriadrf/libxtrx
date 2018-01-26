@@ -77,6 +77,8 @@ struct xtrx_multill_stream {
 struct xtrx_dev {
 	struct xtrxll_dev* lldev;
 	bool               fuselms7_callib;
+	bool               rx_no_siso_map;
+	bool               tx_no_siso_map;
 
 	int                lmsnum;
 	struct lms7_struct lmsdrv[MAX_LMS];
@@ -142,11 +144,11 @@ struct xtrx_dev {
 	unsigned               tx_host_inter;   /* Interpolation on HOST */
 	unsigned               rx_host_decim;   /* Decimation on HOST */
 
+	uint8_t             rx_mmcm_div;
+	uint8_t             tx_mmcm_div;
+	uint8_t             rx_port_cfg;
+	uint8_t             tx_port_cfg;
 };
-
-// FIXME: obtain dynamically
-#define LML_RX_PORT LMS_PORT2
-#define LML_TX_PORT LMS_PORT1
 
 static void xtrx_lms7_logging(const LMS7_log_level_t logLevel, struct LMS7002M_struct *obj, const char *message)
 {
@@ -316,7 +318,11 @@ void xtrx_close(struct xtrx_dev* dev)
 
 	// Put device in power down mode
 	xtrxll_lms7_pwr_ctrl(dev->lldev, XTRXLL_LMS7_ALL, 0);
-	xtrxll_mmcm_onoff(dev->lldev, 0);
+
+	usleep(1000);
+
+	xtrxll_mmcm_onoff(dev->lldev, true, false);
+	xtrxll_mmcm_onoff(dev->lldev, false, false);
 
 	xtrxll_close(dev->lldev);
 
@@ -335,6 +341,11 @@ void xtrx_set_ref_clk(struct xtrx_dev* dev, unsigned refclkhz, xtrx_clock_source
 // FIXME define this value
 #define CGEN_MIN 10e6
 
+enum {
+	LMS7_DECIM_MAX = 32,
+	LMS7_INTER_MAX = 32,
+};
+
 static bool check_lime_decimation(unsigned decim)
 {
 	switch (decim) {
@@ -349,15 +360,18 @@ static bool check_lime_decimation(unsigned decim)
 	return false;
 }
 
-static const int diqmap_qi[4]        = { LMS7002M_LML_AQ, LMS7002M_LML_BQ, LMS7002M_LML_AI, LMS7002M_LML_BI };
-static const int diqmap_swap_qi[4]   = { LMS7002M_LML_BQ, LMS7002M_LML_AQ, LMS7002M_LML_BI, LMS7002M_LML_AI };
-static const int diqmap[4]           = { LMS7002M_LML_AI, LMS7002M_LML_BI, LMS7002M_LML_AQ, LMS7002M_LML_BQ };
-static const int diqmap_swap[4]      = { LMS7002M_LML_BI, LMS7002M_LML_AI, LMS7002M_LML_BQ, LMS7002M_LML_AQ };
+// FIXME B is inverted here for tests only!!!!
+//static const int diqmap[4]              = { LMS7002M_LML_BQ, LMS7002M_LML_AI, LMS7002M_LML_BI, LMS7002M_LML_AQ };
 
-static const int diqmaptx_qi[4]      = { LMS7002M_LML_AQ, LMS7002M_LML_BQ, LMS7002M_LML_AI, LMS7002M_LML_BI };
-static const int diqmaptx_swap_qi[4] = { LMS7002M_LML_BQ, LMS7002M_LML_AQ, LMS7002M_LML_BI, LMS7002M_LML_AI };
-static const int diqmaptx[4]         = { LMS7002M_LML_AI, LMS7002M_LML_BI, LMS7002M_LML_AQ, LMS7002M_LML_BQ };
-static const int diqmaptx_swap[4]    = { LMS7002M_LML_BI, LMS7002M_LML_AI, LMS7002M_LML_BQ, LMS7002M_LML_AQ };
+static const int diqmap[4]              = { LMS7002M_LML_BI, LMS7002M_LML_AI, LMS7002M_LML_BQ, LMS7002M_LML_AQ };
+static const int diqmap_qi[4]           = { LMS7002M_LML_BQ, LMS7002M_LML_AQ, LMS7002M_LML_BI, LMS7002M_LML_AI };
+static const int diqmap_swap[4]         = { LMS7002M_LML_AI, LMS7002M_LML_BI, LMS7002M_LML_AQ, LMS7002M_LML_BQ };
+static const int diqmap_swap_qi[4]      = { LMS7002M_LML_AQ, LMS7002M_LML_BQ, LMS7002M_LML_AI, LMS7002M_LML_BI };
+
+static const int diqmap_siso[4]         = { LMS7002M_LML_AI, LMS7002M_LML_AI, LMS7002M_LML_AQ, LMS7002M_LML_AQ };
+static const int diqmap_siso_qi[4]      = { LMS7002M_LML_AQ, LMS7002M_LML_AQ, LMS7002M_LML_AI, LMS7002M_LML_AI };
+static const int diqmap_siso_swap[4]    = { LMS7002M_LML_BI, LMS7002M_LML_BI, LMS7002M_LML_BQ, LMS7002M_LML_BQ };
+static const int diqmap_siso_swap_qi[4] = { LMS7002M_LML_BQ, LMS7002M_LML_BQ, LMS7002M_LML_BI, LMS7002M_LML_BI };
 
 
 int xtrx_set_samplerate(struct xtrx_dev* dev,
@@ -369,25 +383,79 @@ int xtrx_set_samplerate(struct xtrx_dev* dev,
 						double* actualrx,
 						double* actualtx)
 {
-	XTRXLL_LOG(XTRXLL_ERROR, "xtrx_set_samplerate\n");
-
-	int res = 0, i;
+	int res = 0, i, hwid;
 	int rxdiv = 1;
 	int txdiv = 1;
 	double actualmaster;
 	const unsigned adcdiv_fixed = 4;
 	const unsigned dacdiv       = 4;
 
-	const int rx_trxiq = 0; //(flags & 1) ? 0 : 1;
-	const int rx_gen =   (flags & 2) ? 1 : 0;
-	const int rx_no_decim = (((flags & 4) == 4) && rx_gen) ? 1 : 0;
-	const int tx_no_decim = ((flags & 8)) ? 1 : 0;
-	const int rx_delay = (flags >> 6) & 0x3f;
+	res = xtrxll_get_sensor(dev->lldev, XTRXLL_HWID, &hwid);
+	if (res) {
+		XTRXLL_LOG(XTRXLL_ERROR, "xtrx_set_samplerate: unable to get HWID\n");
+		return res;
+	}
+
+	const unsigned lml1_port_id = hwid & 0x7;
+	const unsigned lml2_port_id = (hwid >> 4) & 0x7;
+
+	const int rx_tdis =  0;
+	const bool no_vio_set = (flags & XTRX_SAMPLERATE_DEBUG_NO_VIO_SET) ? true : false;
+	const int rx_delay = ((flags >> 6) & 0x3ff) | (((flags >> 20) & 0x3ff) << 10); // 1024 max
+	const bool no_rx_fwd_clk = (flags & XTRX_SAMPLERATE_DEBUG_NO_RX_FCLK_GEN) ? true : false;
+
+	const bool opt_decim_inter = (flags & XTRX_SAMPLERATE_AUTO_DECIM) ? true : false;
+
+	dev->rx_no_siso_map = (flags & XTRX_SAMPLERATE_DEBUG_NO_RX_SISO_LML) ? true : false;
+	dev->tx_no_siso_map = (flags & XTRX_SAMPLERATE_DEBUG_NO_TX_SISO_LML) ? true : false;
 
 	unsigned tx_host_inter = 0;
 	unsigned rx_host_decim = 0;
 	unsigned tx_host_mul = 1;
 	unsigned rx_host_div = 1;
+
+	const bool lml1_rx_valid = (lml1_port_id == 3 || lml1_port_id == 4 || lml1_port_id == 5 || lml1_port_id == 6)     || lml1_port_id == 7;
+	const bool lml2_rx_valid = (lml2_port_id == 3 || lml2_port_id == 4 || lml2_port_id == 5 || lml2_port_id == 6)     || lml2_port_id == 7;
+
+	const bool lml1_tx_valid = (lml1_port_id == 1 || lml1_port_id == 2 || lml1_port_id == 4 || lml1_port_id == 6);
+	const bool lml2_tx_valid = (lml2_port_id == 1 || lml2_port_id == 2 || lml2_port_id == 4 || lml2_port_id == 6);
+
+	const bool lml1_use_mmcm = (lml1_port_id == 2 || lml1_port_id == 5 || lml1_port_id == 6)    || lml1_port_id == 7;
+	const bool lml2_use_mmcm = (lml2_port_id == 2 || lml2_port_id == 5 || lml2_port_id == 6)    || lml2_port_id == 7;
+
+	const LMS7002M_port_t tx_port = (lml1_tx_valid && !lml2_tx_valid) ? LMS_PORT1 : LMS_PORT2;
+	const LMS7002M_port_t rx_port = (lml2_rx_valid && !lml1_rx_valid) ? LMS_PORT2 : LMS_PORT1;
+
+	const int tx_gen = (tx_port == LMS_PORT1) ? lml1_use_mmcm : lml2_use_mmcm;
+	const int rx_gen = (rx_port == LMS_PORT2) ? lml2_use_mmcm : lml1_use_mmcm;
+
+	if (lml2_port_id == 0 && lml1_port_id == 0) {
+		XTRXLL_LOG(XTRXLL_ERROR, "Incorrect FPGA port configuration HWID=%08x => TX=%d RX=%d\n",
+				   hwid, tx_port, rx_port);
+		return -EFAULT;
+	}
+	if ((rxrate > 1) && (!lml1_rx_valid && !lml2_rx_valid)) {
+		XTRXLL_LOG(XTRXLL_ERROR, "Current FPGA configuration doesn't support RX, HWID=%08x\n",
+				   hwid);
+		return -EFAULT;
+	}
+	if ((txrate > 1) && (!lml1_tx_valid && !lml2_tx_valid)) {
+		XTRXLL_LOG(XTRXLL_ERROR, "Current FPGA configuration doesn't support TX, HWID=%08x\n",
+				   hwid);
+		return -EFAULT;
+	}
+
+	dev->rx_port_cfg = rx_gen;
+	dev->tx_port_cfg = tx_gen;
+	const bool rx_no_decim = (((flags & XTRX_SAMPLERATE_DEBUG_NO_RX_DECIM) ? true : false) && rx_gen);
+	const bool tx_no_decim = (((flags & XTRX_SAMPLERATE_DEBUG_NO_TX_INTR) ? true : false) && tx_gen);
+
+	const bool no_8ma = (flags & XTRX_SAMPLERATE_DEBUG_NO_8MA_LML) ? true : false;
+	const bool slow_mclk_rx_x2 = (((flags & XTRX_SAMPLERATE_DEBUG_SLOW_MCLK) ? true : false) && rx_gen);
+	const bool slow_mclk_tx_x2 = (((flags & XTRX_SAMPLERATE_DEBUG_SLOW_MCLK) ? true : false) && tx_gen);
+
+	const bool x2_int_clk = (lml1_rx_valid && (lml1_port_id == 7)) || (lml2_rx_valid && (lml2_port_id == 7));
+	const unsigned slow_factor = 2;
 
 	if (dev->clock_source) {
 		XTRXLL_LOG(XTRXLL_ERROR, "CLK TYPE: %d\n", dev->clock_source);
@@ -445,30 +513,25 @@ int xtrx_set_samplerate(struct xtrx_dev* dev,
 		rx_host_decim++;
 	}
 
-	//TODO: autoselect best master clock based on rxrate & txrate
-
-	//if (dev->masterclock) {
-	// TODO reset settings
-	int mmcm_flag = ((txrate < 1) && rx_gen) ? XTRXLL_MMCM_MCLK2 : 0;
-	if (txrate || rx_gen) {
-		xtrxll_mmcm_onoff(dev->lldev, 0 | mmcm_flag);
-
-		usleep(1000);
-
-		res = xtrxll_mmcm_onoff(dev->lldev, XTRXLL_MMCM_ON | mmcm_flag);
-		if (res) {
-			XTRXLL_LOG(XTRXLL_ERROR, "xtrx_set_samplerate: can't turn on MMCM\n");
-			return -EFAULT;
-		}
-	}
-	//}
-
 	// TODO: determine best possible combination of adcdiv / dacdiv, just
 	// for now we use fixed 4 divider for both
 	if (cgen_rate == 0) {
 		// If we activate host decimation or interpolation than we need more samplerate
 		cgen_rate = MAX((rx_no_decim ? 1 : 2) * rxrate * rx_host_div * adcdiv_fixed,
-						(tx_no_decim ? 1 : 2) * txrate * tx_host_mul * dacdiv);
+						(tx_no_decim ? 1 : ((tx_gen) ? 2 : 4)) * txrate * tx_host_mul * dacdiv);
+
+		// For low sample rate increase DAC/ADC due to frequency aliasing
+		if ((rxrate > 1 && rxrate < 2e6) || (txrate > 1 && txrate < 2e6) || opt_decim_inter) {
+			for (; cgen_rate <= 320e6; cgen_rate *= 2) {
+				if ((rxrate > 1) && (((cgen_rate * 2 / (rxrate * rx_host_div)) / adcdiv_fixed) >= LMS7_DECIM_MAX))
+					break;
+
+				if ((txrate > 1) && (((cgen_rate * 2 / (txrate * tx_host_mul)) / dacdiv) >= LMS7_INTER_MAX))
+					break;
+
+				XTRXLL_LOG(XTRXLL_INFO, "Increase CGEN %.3f Mhz", cgen_rate * 2);
+			}
+		}
 	}
 
 	if (rxrate > 1) {
@@ -490,6 +553,7 @@ int xtrx_set_samplerate(struct xtrx_dev* dev,
 		return -EINVAL;
 	}
 
+
 	if (((dev->rx_run) && (dev->rx_host_decim != rx_host_decim)) ||
 		((dev->tx_run) && (dev->tx_host_inter != tx_host_inter))) {
 		XTRXLL_LOG(XTRXLL_ERROR, "xtrx_set_samplerate: can't change extra host decimation when stream is running\n");
@@ -507,29 +571,35 @@ int xtrx_set_samplerate(struct xtrx_dev* dev,
 	dev->tx_host_inter = tx_host_inter;
 	dev->rx_host_decim = rx_host_decim;
 
-	// FIXME check div/interp settings for correctess
-
 	for (i = 0; i < dev->lmsnum; ++i) {
 		// For clock speed more 100Mhz we need to increase drive strength
-		bool h = ((rxrate > 50e6) || (txrate > 50e6));
+		bool h = (!no_8ma) && ((rxrate > 40e6) || (txrate > 40e6) || (tx_gen == 0 && txrate > 20e6));
 		LMS7002M_set_drive_strength(dev->lmsdrv[i].lms7, h, h);
 	}
 
 	// 1. Set CGEN frequency
 	for (i = 0; i < dev->lmsnum; ++i) {
-		res = LMS7002M_set_data_clock_div(dev->lmsdrv[i].lms7,
-										  dev->refclock,
-										  false,
-										  2,
-										  cgen_rate,
-										  &actualmaster);
-		if (res == -1) {
-			return -EINVAL;
-		} else if (res == -3) {
+		unsigned j;
+		for (j = 0; j < 3; j++) {
+			res = LMS7002M_set_data_clock_div(dev->lmsdrv[i].lms7,
+											  dev->refclock,
+											  false,
+											  2,
+											  cgen_rate,
+											  &actualmaster);
+			if (res == -1) {
+				return -EINVAL;
+			} else if (res == -3) {
+				continue;
+			} else if (res != 0) {
+				abort();
+			} else {
+				break;
+			}
+		}
+		if (res == -3) {
 			XTRXLL_LOG(XTRXLL_ERROR, "xtrx_set_samplerate: can't tune VCO for data clock\n");
 			return -ERANGE;
-		} else if (res != 0) {
-			abort();
 		}
 
 		if (actualcgen)
@@ -537,13 +607,6 @@ int xtrx_set_samplerate(struct xtrx_dev* dev,
 
 		dev->masterclock = actualmaster;
 	}
-	XTRXLL_LOG(XTRXLL_INFO, "xtrx_set_samplerate: rxrate=%.3fMHz txrate=%.3fMHz"
-							" actual_master=%.3fMHz rxdecim=%d(h_%d) txinterp=%d(h_%d)"
-							" RX_ADC=%.3fMHz TX_DAC=%.3fMHz MMCM_SRC=%s hintr=%d hdecim=%d\n",
-			   rxrate / 1e6, txrate / 1e6,
-			   actualmaster / 1e6, rxdiv, rx_host_div, txdiv, tx_host_mul,
-			   cgen_rate / adcdiv_fixed / 1e6, cgen_rate / dacdiv / 1e6,
-			   mmcm_flag ? "MCLK2" : "MCLK1", tx_host_inter, rx_host_decim);
 
 	// TODO FIXME
 	bool update_running = false;
@@ -561,18 +624,14 @@ int xtrx_set_samplerate(struct xtrx_dev* dev,
 	}
 
 	// 2. Set LML RX
+	unsigned rxtsp_div = 1;
 	if (rxrate > 0) {
+		rxtsp_div = ((slow_mclk_rx_x2) ? slow_factor : 1) * ((rxdiv > 1) ? (rxdiv / 2) : 1);
 		for (i = 0; i < dev->lmsnum; ++i) {
 			LMS7002M_configure_lml_port(dev->lmsdrv[i].lms7,
-										LML_RX_PORT,
+										rx_port/*LML_RX_PORT*/,
 										LMS_RX,
-										(rxdiv > 1) ? (rxdiv / 2) : 1);
-
-			LMS7002M_invert_mclk_ex(dev->lmsdrv[i].lms7, LML_RX_PORT, rx_trxiq);
-
-			if (rx_gen) {
-				//LMS7002M_configure_lml_port_rdfclk(dev->lmsdrv[i].lms7, LML_RX_PORT);
-			}
+										rxtsp_div);
 
 			if (~dev->rx_run) {
 				LMS7002M_set_diq_mux(dev->lmsdrv[i].lms7, LMS_RX, diqmap);
@@ -583,41 +642,30 @@ int xtrx_set_samplerate(struct xtrx_dev* dev,
 		if (actualrx) {
 			*actualrx =  actualmaster / rxdiv / adcdiv_fixed;
 		}
-	}
 
-	// 3. Set LML TX && MMCM for T
-	for (i = 0; i < dev->lmsnum; ++i) {
-		LMS7002M_configure_lml_port(dev->lmsdrv[i].lms7,
-									LML_TX_PORT,
-									LMS_TX,
-									(txdiv > 1) ? (txdiv / 2) : 1);
-		LMS7002M_set_diq_mux(dev->lmsdrv[i].lms7, LMS_TX, diqmaptx);
-
-		if (~dev->tx_run) {
-			LMS7002M_tbb_enable(dev->lmsdrv[i].lms7, LMS_CHAB, true);
+		for (unsigned q = 0; q <= 12; q++) {
+			xtrxll_set_param(dev->lldev, XTRXLL_PARAM_RX_DLY, (q) | (0 << 4));
 		}
 	}
-	if (txrate > 1 || rx_gen) {
+
+	// 3. Set LML TX
+	unsigned txtsp_div = 1;
+	if (txrate > 1) {
+		txtsp_div = ((slow_mclk_tx_x2) ? slow_factor : 1) * ((txdiv > 1) ? (txdiv / 2) : 1);
+		for (i = 0; i < dev->lmsnum; ++i) {
+			LMS7002M_configure_lml_port(dev->lmsdrv[i].lms7,
+										tx_port/*LML_TX_PORT*/,
+										LMS_TX,
+										(tx_gen) ? txtsp_div : txtsp_div / 2);
+			LMS7002M_set_diq_mux(dev->lmsdrv[i].lms7, LMS_TX, diqmap);
+
+			if (~dev->tx_run) {
+				LMS7002M_tbb_enable(dev->lmsdrv[i].lms7, LMS_CHAB, true);
+			}
+		}
+
 		if (actualtx) {
 			*actualtx = actualmaster / txdiv / dacdiv;
-		}
-
-		res = xtrxll_mmcm_onoff(dev->lldev, XTRXLL_MMCM_ON | mmcm_flag);
-		if (res)
-			return -EFAULT;
-
-		int mclk = (txrate > 1) ? 2 * actualmaster / txdiv / dacdiv :
-								  2 * actualmaster / rxdiv / adcdiv_fixed;
-
-		XTRXLL_LOG(XTRXLL_ERROR, "MCLK=%.3f MHz\n", mclk / 1.0e6);
-		res = xtrxll_mmcm_setfreq(dev->lldev,
-								  mclk,
-								  rx_no_decim && rxdiv == 1,
-								  tx_no_decim && txdiv == 1,
-								  rx_delay);
-		if (res != 0) {
-			XTRXLL_LOG(XTRXLL_ERROR, "Unable to configure MMCM to %d res = %d\n", mclk, res);
-			return -ERANGE;
 		}
 	}
 
@@ -628,26 +676,99 @@ int xtrx_set_samplerate(struct xtrx_dev* dev,
 							   ((dev->clock_source == XTRX_CLKSRC_EXT) ? XTRXLL_EXT_CLK : 0) |
 							   ((1) ? XTRXLL_LMS7_RXEN_PIN : 0) |
 							   ((1) ? XTRXLL_LMS7_TXEN_PIN : 0) |
-							   ((rx_trxiq) ? XTRXLL_LMS7_RX_TRXIQ : 0) |
-							   ((rx_gen) ?   XTRXLL_LMS7_RX_GEN : 0));
+							   ((rx_tdis) ? XTRXLL_LMS7_RX_TERM_D : 0) |
+							   ((rx_gen && !no_rx_fwd_clk) ?  XTRXLL_LMS7_RX_GEN : 0));
 
-	if (rxrate > 1) {
-		if (rxrate < 30e6) {
-			res = xtrxll_set_param(dev->lldev, XTRXLL_PARAM_PWR_VIO, 1500);
-		} else if (rxrate > 1 && rxrate < 50e6) {
-			res = xtrxll_set_param(dev->lldev, XTRXLL_PARAM_PWR_VIO, 1800);
-		} else {
-			//res = xtrxll_set_param(dev->lldev, XTRXLL_PARAM_PWR_VIO, 1900);
-		}
+	if (!no_vio_set && (rxrate > 1 || txrate > 1)) {
+		res = xtrxll_set_param(dev->lldev, XTRXLL_PARAM_PWR_VIO, 1800);
 		if (res)
 			return res;
 	}
 
-	if (rxrate > 1 && rx_gen) {
-		LMS7002M_configure_lml_port_rdfclk(dev->lmsdrv[0].lms7, LML_RX_PORT);
-		LMS7002M_invert_fclk_ex(dev->lmsdrv[0].lms7, LML_RX_PORT, true);
+	// 5. TX MMCM
+	double tx_mclk = 0;
+	if (txrate > 1 && tx_gen) {
+		// MCLK is generated only when AFE is enabled
+		LMS7002M_afe_enable(dev->lmsdrv[0].lms7, LMS_TX, LMS_CHAB, true);
+
+		tx_mclk = actualmaster / dacdiv / txtsp_div;
+		int mclk = tx_mclk;
+
+		XTRXLL_LOG(XTRXLL_ERROR, "TX MCLK=%.3f (extra %d) MHz\n", mclk / 1.0e6, (((slow_mclk_tx_x2) ? slow_factor : 1)));
+		res = xtrxll_mmcm_onoff(dev->lldev, true, true);
+		if (res) {
+			XTRXLL_LOG(XTRXLL_ERROR, "xtrx_set_samplerate: can't turn on TX MMCM\n");
+			return -EFAULT;
+		}
+
+		res = xtrxll_mmcm_setfreq(dev->lldev,
+								  tx_port == LMS_PORT1,
+								  mclk,
+								  ((tx_no_decim && txdiv == 1) ? LML_CLOCK_X2 : LML_CLOCK_NORM) | LML_CLOCK_FWD_90,
+								  0,
+								  &dev->tx_mmcm_div,
+								  (slow_mclk_tx_x2) ? 2 * slow_factor : 2);
+		if (res != 0) {
+			XTRXLL_LOG(XTRXLL_ERROR, "Unable to configure TX MMCM to %d res = %d\n", mclk, res);
+			return -ERANGE;
+		}
+	} else {
+		dev->tx_mmcm_div = 0;
 	}
 
+	// 6. RX MMCM
+	double rx_mclk = 0;
+	if (rxrate > 1 && rx_gen) {
+		// MCLK is generated only when AFE is enabled
+		LMS7002M_afe_enable(dev->lmsdrv[0].lms7, LMS_RX, LMS_CHAB, true);
+		//usleep(1000*1000);
+
+		//int mclk = 2 * actualmaster / rxdiv / adcdiv_fixed / ((rx_no_decim  && rxdiv == 1) ? 2 : 1);
+		rx_mclk = actualmaster / adcdiv_fixed / rxtsp_div;
+		int mclk = rx_mclk;
+		XTRXLL_LOG(XTRXLL_ERROR, "RX MCLK=%.3f (%d extra) MHz\n", mclk / 1.0e6, (((slow_mclk_rx_x2) ? slow_factor : 1)));
+		res = xtrxll_mmcm_onoff(dev->lldev, false, true);
+		if (res) {
+			XTRXLL_LOG(XTRXLL_ERROR, "xtrx_set_samplerate: can't turn on RX MMCM\n");
+			return -EFAULT;
+		}
+		usleep(10*1000);
+
+		res = xtrxll_mmcm_setfreq(dev->lldev,
+								  rx_port == LMS_PORT1,
+								  mclk,
+								  ((rx_no_decim && rxdiv == 1) ? LML_CLOCK_X2 : ((no_rx_fwd_clk) ? LML_CLOCK_RX_SELF : LML_CLOCK_NORM)) | (x2_int_clk ? LML_CLOCK_INT_X2 : 0),
+								  rx_delay,
+								  &dev->rx_mmcm_div,
+								  (slow_mclk_rx_x2) ? 2 * slow_factor : 2);
+		if (res != 0) {
+			XTRXLL_LOG(XTRXLL_ERROR, "Unable to configure RX MMCM to %d res = %d\n", mclk, res);
+			return -ERANGE;
+		}
+
+		if (!no_rx_fwd_clk) {
+			LMS7002M_configure_lml_port_rdfclk(dev->lmsdrv[0].lms7, rx_port/*LML_RX_PORT*/);
+		}
+	} else {
+		dev->rx_mmcm_div = 0;
+	}
+
+	XTRXLL_LOG(XTRXLL_INFO, "xtrx_set_samplerate: rxrate=%.3fMHz txrate=%.3fMHz"
+							" actual_master=%.3fMHz rxdecim=%d(h_%d) txinterp=%d(h_%d)"
+							" RX_ADC=%.3fMHz TX_DAC=%.3fMHz hintr=%d hdecim=%d delay=%d NRXFWD=%d LML1HID=%d LML2HID=%d"
+							" RX_div=%d TX_div=%d RX_TSP_div=%d TX_TSP_div=%d FclkRX=%.3f (PHS=%d)"
+							" RXx2=%d\n",
+			   rxrate / 1e6, txrate / 1e6,
+			   actualmaster / 1e6, rxdiv, rx_host_div, txdiv, tx_host_mul,
+			   cgen_rate / adcdiv_fixed / 1e6, cgen_rate / dacdiv / 1e6,
+			   tx_host_inter, rx_host_decim,
+			   rx_delay, no_rx_fwd_clk,
+			   lml1_port_id, lml2_port_id,
+			   dev->rx_mmcm_div, dev->tx_mmcm_div,
+			   rxtsp_div, txtsp_div,
+			   (dev->rx_mmcm_div == 0) ? 0 : dev->rx_mmcm_div * rx_mclk / (dev->rx_mmcm_div / ((slow_mclk_rx_x2) ? 2 * slow_factor : 2)) / 1e6,
+			   (dev->rx_mmcm_div == 0) ? 0 : (dev->rx_mmcm_div / ((slow_mclk_rx_x2) ? 2 * slow_factor : 2)),
+			   x2_int_clk);
 	return 0;
 }
 
@@ -1081,6 +1202,7 @@ int xtrx_run_ex(struct xtrx_dev* dev, const xtrx_run_params_t* params)
 			dev->rx_scale_16 *= params->rx.scale;
 		}
 
+#if 0
 		if (xtrx_run_params_stream_is_swap(&params->rx)) {
 			if (params->rx.flags & XTRX_RSP_SWAP_IQ) {
 				LMS7002M_set_diq_mux(dev->lmsdrv[chan].lms7, LMS_RX, diqmap_swap_qi);
@@ -1089,7 +1211,30 @@ int xtrx_run_ex(struct xtrx_dev* dev, const xtrx_run_params_t* params)
 			}
 		} else if (params->rx.flags & XTRX_RSP_SWAP_IQ) {
 			LMS7002M_set_diq_mux(dev->lmsdrv[chan].lms7, LMS_RX, diqmap_qi);
+		} else {
+			if (!xtrx_run_params_stream_is_mimo(&params->rx)) {
+				LMS7002M_set_diq_mux(dev->lmsdrv[chan].lms7, LMS_RX, diqmap_siso);
+			}
 		}
+#else
+		const int *const diqarray[8] = {
+			diqmap, diqmap_qi, diqmap_swap, diqmap_swap_qi,
+			diqmap_siso, diqmap_siso_qi, diqmap_siso_swap, diqmap_siso_swap_qi,
+		};
+
+		unsigned diqidx = 0;
+		if (params->rx.flags & XTRX_RSP_SWAP_IQ)
+			diqidx |= 1;
+		if (xtrx_run_params_stream_is_swap(&params->rx))
+			diqidx |= 2;
+		if (!dev->rx_no_siso_map && !xtrx_run_params_stream_is_mimo(&params->rx))
+			diqidx |= 4;
+
+		assert(diqidx < 8);
+		if (diqidx != 0) {
+			LMS7002M_set_diq_mux(dev->lmsdrv[chan].lms7, LMS_RX, diqarray[diqidx]);
+		}
+#endif
 
 		LMS7002M_rxtsp_enable(dev->lmsdrv[chan].lms7, rx_lmschan, true);
 		LMS7002M_rxtsp_set_decim(dev->lmsdrv[chan].lms7, rx_lmschan, dev->rxtsp_decim);
@@ -1233,7 +1378,7 @@ int xtrx_run_ex(struct xtrx_dev* dev, const xtrx_run_params_t* params)
 			}
 		}
 
-
+#if 0
 		if (xtrx_run_params_stream_is_swap(&params->tx)) {
 			if (params->tx.flags & XTRX_RSP_SWAP_IQ) {
 				LMS7002M_set_diq_mux(dev->lmsdrv[chan].lms7, LMS_TX, diqmaptx_swap_qi);
@@ -1243,7 +1388,25 @@ int xtrx_run_ex(struct xtrx_dev* dev, const xtrx_run_params_t* params)
 		} else if (params->tx.flags & XTRX_RSP_SWAP_IQ) {
 			LMS7002M_set_diq_mux(dev->lmsdrv[chan].lms7, LMS_TX, diqmaptx_qi);
 		}
+#else
+		const int *const diqarray[8] = {
+			diqmap, diqmap_qi, diqmap_swap, diqmap_swap_qi,
+			diqmap_siso, diqmap_siso_qi, diqmap_siso_swap, diqmap_siso_swap_qi,
+		};
 
+		unsigned diqidx = 0;
+		if (params->tx.flags & XTRX_RSP_SWAP_IQ)
+			diqidx |= 1;
+		if (xtrx_run_params_stream_is_swap(&params->tx))
+			diqidx |= 2;
+		if (!dev->tx_no_siso_map && !xtrx_run_params_stream_is_mimo(&params->tx))
+			diqidx |= 4;
+
+		assert(diqidx < 8);
+		if (diqidx != 0) {
+			LMS7002M_set_diq_mux(dev->lmsdrv[chan].lms7, LMS_TX, diqarray[diqidx]);
+		}
+#endif
 		LMS7002M_txtsp_enable(dev->lmsdrv[chan].lms7, tx_lmschan, true);
 		LMS7002M_txtsp_set_interp(dev->lmsdrv[chan].lms7, tx_lmschan, dev->txtsp_interp);
 		LMS7002M_trf_enable(dev->lmsdrv[chan].lms7, tx_lmschan, true);
@@ -1328,6 +1491,10 @@ int xtrx_run_ex(struct xtrx_dev* dev, const xtrx_run_params_t* params)
 		}
 	}
 #endif
+
+	//xtrxll_set_param(dev->lldev, XTRXLL_PARAM_RX_DLY, (0) | (1 << 4));
+	//xtrxll_set_param(dev->lldev, XTRXLL_PARAM_RX_DLY, (15));
+
 	return 0;
 
 fail_dma_start:
@@ -1436,20 +1603,21 @@ int xtrx_send_sync_ex(struct xtrx_dev* dev, xtrx_send_ex_info_t *info)
 	info->out_flags = 0;
 	info->out_samples = 0;
 
+	unsigned timeout_ms = (info->flags & XTRX_TX_TIMEOUT) ? info->timeout : ~0UL;
+
 	for (;;) {
 		void* wire_buffer_ptr;
 		size_t wire_buffer_size; /* maximum DMA buffer size in bytes */
 
 		if (dev->txbuf == NULL) {
 			for (;;) {
-				res = xtrxll_dma_tx_getfree_ex(dev->lldev, chan, &wire_buffer_ptr, &cur_late);
+				res = xtrxll_dma_tx_getfree_ex(dev->lldev, chan, &wire_buffer_ptr, &cur_late, timeout_ms);
 				switch (res) {
 				//case -EPIPE:
 				default:
 					abort();
 				case -EBUSY:
-					usleep(50);
-					continue;
+					return res;
 				case 0:
 					dev->txbuf = wire_buffer_ptr;
 					goto got_buffer;
@@ -1462,6 +1630,7 @@ got_buffer:
 			dev->txbuf_processed_ts = 0;
 
 			upd_late = cur_late - dev->txburt_late_prev;
+#if 0
 			if (dev->txskip_time > cur_wts) {
 				XTRXLL_LOG(XTRXLL_ERROR, "xtrx_send_burst_sync: TX DMA Current skip due to TO buffers: %d, prev: %d TS:%" PRId64 " STPS:%" PRId64 "\n",
 						   cur_late, dev->txburt_late_prev, cur_wts, dev->txskip_time);
@@ -1479,7 +1648,7 @@ got_buffer:
 				info->out_flags |= XTRX_TX_DISCARDED_TO;
 				return 0;
 			}
-
+#endif
 		} else {
 			cur_late = dev->txburt_late_prev;
 
@@ -1655,6 +1824,9 @@ int xtrx_recv_sync_ex(struct xtrx_dev* dev, xtrx_recv_ex_info_t* info)
 	if (info->flags & RCVEX_EXTRA_LOG)
 		flags |= XTRXLL_RX_FORCELOG;
 
+	if (info->flags & RCVEX_TIMOUT)
+		flags |= XTRXLL_RX_REPORT_TIMEOUT;
+
 	for (;;) {
 		void* wire_buffer_ptr;
 		unsigned wire_buffer_size; /* in bytes */
@@ -1667,7 +1839,8 @@ int xtrx_recv_sync_ex(struct xtrx_dev* dev, xtrx_recv_ex_info_t* info)
 											&wire_buffer_ptr,
 											&dev->rxbuf_ts,
 											&wire_buffer_size,
-											flags);
+											flags,
+											info->timeout);
 				switch (res) {
 				case -EOVERFLOW:
 					info->out_events |= RCVEX_EVENT_OVERFLOW;
@@ -1897,6 +2070,12 @@ int xtrx_val_set(struct xtrx_dev* dev, xtrx_direction_t dir,
 	int res;
 
 	switch (type) {
+	case XTRX_LML_PHY_PHASE:
+		XTRXLL_LOG(XTRXLL_INFO, "Set LMS7 LML FCLK Phase to %d\n", (int)val);
+		return xtrxll_mmcm_fphase_corr(dev->lldev, true, val, false);
+	case XTRX_LML_PHY_FBPHASE:
+		XTRXLL_LOG(XTRXLL_INFO, "Set LMS7 LML FB Phase to %d\n", (int)val);
+		return xtrxll_mmcm_fphase_corr(dev->lldev, true, val, true);
 	case XTRX_LMS7_PWR_MODE:
 		XTRXLL_LOG(XTRXLL_INFO, "Set LMS7 power mode to %d\n", (int)val);
 		return xtrxll_set_param(dev->lldev, XTRXLL_PARAM_PWR_MODE, val);
@@ -1916,7 +2095,7 @@ int xtrx_val_set(struct xtrx_dev* dev, xtrx_direction_t dir,
 									 val & 0xffff, (val >> 16) & 0xffff);
 		return 0;
 	case XTRX_VCTCXO_DAC_VAL:
-		return xtrxll_set_osc_dac(dev->lldev, chan);
+		return xtrxll_set_osc_dac(dev->lldev, val);
 	default:
 		return -EINVAL;
 	}

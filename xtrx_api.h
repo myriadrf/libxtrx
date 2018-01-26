@@ -111,12 +111,26 @@ XTRX_API int xtrx_discovery(xtrx_device_info_t* devs, size_t maxbuf);
 
 typedef enum xtrx_samplerate_flags {
 	// Flags 1 throgh 8 are reserveed for debug
+	XTRX_SAMPLERATE_DEBUG_NO_RX_SISO_LML = (1U << 0),
+	XTRX_SAMPLERATE_DEBUG_SLOW_MCLK = (1U << 1),
+	XTRX_SAMPLERATE_DEBUG_NO_RX_DECIM = (1U << 2),
+	XTRX_SAMPLERATE_DEBUG_NO_TX_INTR = (1U << 3),
 
-	XTRX_SAMPLERATE_FORCE_TX_INTR = 16,
-	XTRX_SAMPLERATE_FORCE_RX_DECIM = 32,
+	XTRX_SAMPLERATE_FORCE_TX_INTR = (1U << 4),
+	XTRX_SAMPLERATE_FORCE_RX_DECIM = (1U << 5),
+
+	/* bits from 6 to 15 are reserved */
+
+	XTRX_SAMPLERATE_DEBUG_NO_RX_FCLK_GEN = (1U << 16),
+	XTRX_SAMPLERATE_DEBUG_NO_TX_SISO_LML = (1U << 17),
+	XTRX_SAMPLERATE_DEBUG_NO_8MA_LML = (1U << 18),
+	XTRX_SAMPLERATE_DEBUG_NO_VIO_SET = (1U << 19),
+
+	/* bits from 20 to 29 are reserved */
 
 	/** Update samplerate at runtime, timing can't be kept precise */
-	XTRX_SAMPLERATE_FORCE_UPDATE = 128,
+	XTRX_SAMPLERATE_FORCE_UPDATE = (1U << 30),
+	XTRX_SAMPLERATE_AUTO_DECIM = (1U << 31),
 } xtrx_samplerate_flags_t;
 
 /** Set samplerate for the XTRX device
@@ -296,8 +310,9 @@ enum xtrx_send_ex_flags {
 	/** When set it's supposed that data are zeros and buffers can be NULL */
 	XTRX_TX_SEND_ZEROS = 2,
 
-
 	XTRX_TX_DONT_BUFFER = 4,
+
+	XTRX_TX_TIMEOUT = 8,
 };
 
 typedef struct xtrx_send_ex_info {
@@ -307,6 +322,7 @@ typedef struct xtrx_send_ex_info {
 
 	const void* const* buffers;
 	unsigned buffer_count;
+	unsigned timeout;
 
 	unsigned out_flags;
 	unsigned out_samples; /**< Number of sample consumed in each user buffer */
@@ -334,6 +350,8 @@ enum xtrx_recv_ex_info_flags {
 	RCVEX_DROP_OLD_ON_OVERFLOW = 8,
 
 	RCVEX_EXTRA_LOG = 16,
+
+	RCVEX_TIMOUT = 32,
 };
 
 enum xtrx_recv_ex_info_events {
@@ -349,6 +367,8 @@ typedef struct xtrx_recv_ex_info {
 	void* const* buffers;
 
 	unsigned flags;
+
+	unsigned timeout;
 
 	/* output: caught events */
 	unsigned out_samples;   /** Number of filled samples in each buffer */
@@ -385,6 +405,8 @@ typedef enum xtrx_val {
 	XTRX_IC_TEMP,
 	XTRX_OSC_LATCH_1PPS,
 	XTRX_REF_XO_DAC,
+	XTRX_LML_PHY_PHASE,
+	XTRX_LML_PHY_FBPHASE,
 
 	/* Performance counters */
 	XTRX_PERF_SAMPLES = 0x3000,
