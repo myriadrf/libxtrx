@@ -580,7 +580,7 @@ int xtrx_set_samplerate(struct xtrx_dev* dev,
 	// 1. Set CGEN frequency
 	for (i = 0; i < dev->lmsnum; ++i) {
 		unsigned j;
-		for (j = 0; j < 3; j++) {
+		for (j = 0; j < 10; j++) {
 			res = LMS7002M_set_data_clock_div(dev->lmsdrv[i].lms7,
 											  dev->refclock,
 											  false,
