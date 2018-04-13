@@ -1580,18 +1580,22 @@ enum processing_type {
 
 int xtrx_send_sync_ex(struct xtrx_dev* dev, xtrx_send_ex_info_t *info)
 {
+	if (!dev->tx_run) {
+		XTRXLL_LOG(XTRXLL_ERROR, "xtrx_send_sync_ex: TX stream is not configured\n");
+		return -ENOSTR;
+	}
+
 	const int chan = 0;
 	/* Total numer of sample in all channels */
 	size_t total_samples = info->samples * info->buffer_count;
 	/* Total bytes user requested */
 	size_t user_total = total_samples * dev->txbuf_len_iq_host_sym / dev->tx_chans_in_stream;
-	/* Total bytes satisfied from user */
-	size_t user_processed = 0;
-
-	int res;
-
 	if (user_total == 0 || info->buffer_count > 2)
 		return -EINVAL;
+
+	/* Total bytes satisfied from user */
+	size_t user_processed = 0;
+	int res;
 
 	/* expanding from host encoding to the wire format times 2, we need this
 	   to present 12-bit wire format in integer */
@@ -1798,11 +1802,19 @@ got_buffer:
 
 int xtrx_recv_sync_ex(struct xtrx_dev* dev, xtrx_recv_ex_info_t* info)
 {
+	if (!dev->rx_run) {
+		XTRXLL_LOG(XTRXLL_ERROR, "xtrx_recv_sync_ex: RX stream is not configured\n");
+		return -ENOSTR;
+	}
+
 	const int chan = 0;
 	/* One sample in all channels in bytes */
 	size_t total_samples = info->samples * info->buffer_count;
 	/* Total bytes user requested */
 	size_t user_total = total_samples * dev->rxbuf_len_iq_host_sym  / dev->rx_chans_in_stream;
+	if (user_total == 0 || info->buffer_count > 2)
+		return -EINVAL;
+
 	/* Total bytes satisfied for user */
 	size_t user_processed = 0;
 
@@ -1811,9 +1823,6 @@ int xtrx_recv_sync_ex(struct xtrx_dev* dev, xtrx_recv_ex_info_t* info)
 
 	/* expanding from wire decoding to the host format times 2 */
 	unsigned decode_amplification_x2 = 2 * dev->rxbuf_len_iq_host_sym / dev->rxbuf_len_iq_symbol;
-
-	if (user_total == 0 || info->buffer_count > 2)
-		return -EINVAL;
 
 	info->out_samples = 0;
 	info->out_events = 0;
@@ -2069,6 +2078,13 @@ int xtrx_val_set(struct xtrx_dev* dev, xtrx_direction_t dir,
 	LMS7002M_chan_t lmsch;
 	int res;
 
+	if (type >= XTRX_RFIC_REG_0 && type <= XTRX_RFIC_REG_0 + 65535)	{
+		uint32_t rd;
+		uint32_t wr = ((0x8000 | (type - XTRX_RFIC_REG_0)) << 16) | (val & 0xffff);
+		return xtrxll_lms7_spi_bulk(dev->lldev, 1, &wr, &rd, 1);
+	}
+
+
 	switch (type) {
 	case XTRX_LML_PHY_PHASE:
 		XTRXLL_LOG(XTRXLL_INFO, "Set LMS7 LML FCLK Phase to %d\n", (int)val);
@@ -2107,6 +2123,14 @@ XTRX_API int xtrx_val_get(struct xtrx_dev* dev, xtrx_direction_t dir,
 	int res, val;
 	const int i = 0;
 	LMS7002M_chan_t lmsch;
+
+	if (type >= XTRX_RFIC_REG_0 && type <= XTRX_RFIC_REG_0 + 65535)	{
+		uint32_t rd;
+		uint32_t wr = ((0x7fff & (type - XTRX_RFIC_REG_0)) << 16);
+		res = xtrxll_lms7_spi_bulk(dev->lldev, 1, &wr, &rd, 1);
+		*oval = rd & 0xffff;
+		return res;
+	};
 
 	switch (type) {
 	case XTRX_UNDERLYING_LL:
