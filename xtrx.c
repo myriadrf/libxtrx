@@ -1572,6 +1572,7 @@ int xtrx_stop(struct xtrx_dev* dev, xtrx_direction_t dir)
 #define MAKE_FORMAT(wire, format) (((wire) << 8) | (format))
 enum processing_type {
 	WIRE_I8_HOST_I8    = MAKE_FORMAT(XTRX_WF_8,  XTRX_IQ_INT8),
+	WIRE_I8_HOST_I16   = MAKE_FORMAT(XTRX_WF_8,  XTRX_IQ_INT16),
 	WIRE_I8_HOST_F32   = MAKE_FORMAT(XTRX_WF_8,  XTRX_IQ_FLOAT32),
 	WIRE_I12_HOST_F32  = MAKE_FORMAT(XTRX_WF_12, XTRX_IQ_FLOAT32),
 	WIRE_I16_HOST_F32  = MAKE_FORMAT(XTRX_WF_16, XTRX_IQ_FLOAT32),
@@ -1746,8 +1747,10 @@ got_buffer:
 					   enc_buf[0],
 						wire_bytes_consumed);
 			} else {
-				// TODO add dsp function for the stream merging
-				abort();
+				xtrxdsp_ic16i_iq16(enc_buf[0],
+						enc_buf[1],
+						wire_buffer_ptr,
+						wire_bytes_consumed);
 			}
 			break;
 		case WIRE_I16_HOST_F32:
@@ -1962,16 +1965,36 @@ got_buffer:
 			}
 			info->out_events |= RCVEX_EVENT_FILLED_ZERO;
 		} else {
-			switch (MAKE_FORMAT(dev->rx_busfmt, dev->rx_hostfmt)) {
+			int datafmt = MAKE_FORMAT(dev->rx_busfmt, dev->rx_hostfmt);
+			switch (datafmt) {
 			case WIRE_I8_HOST_I8:
 			case WIRE_I16_HOST_I16:
 				if (info->buffer_count == 1) {
 					memcpy(dst_buf[0],
 							wire_buffer_ptr,
 							wire_bytes_consumed);
-				} else {
-					// TODO add dsp function for the stream separation
-					abort();
+				} else if (datafmt == WIRE_I16_HOST_I16) {
+					xtrxdsp_iq16_ic16i(wire_buffer_ptr,
+									   dst_buf[0],
+							dst_buf[1],
+							wire_bytes_consumed);
+				} else if (datafmt == WIRE_I8_HOST_I8) {
+					xtrxdsp_iq8_ic8i(wire_buffer_ptr,
+									   dst_buf[0],
+							dst_buf[1],
+							wire_bytes_consumed);
+				}
+				break;
+			case WIRE_I8_HOST_I16:
+				if (info->buffer_count == 1) {
+					xtrxdsp_iq8_ic16(wire_buffer_ptr,
+									 dst_buf[0],
+							wire_bytes_consumed);
+				} else if (datafmt == WIRE_I16_HOST_I16) {
+					xtrxdsp_iq8_ic16i(wire_buffer_ptr,
+									   dst_buf[0],
+							dst_buf[1],
+							wire_bytes_consumed);
 				}
 				break;
 			case WIRE_I8_HOST_F32:
@@ -2001,6 +2024,7 @@ got_buffer:
 				}
 				break;
 			case WIRE_I12_HOST_F32:
+			default:
 				// TODO generelize call to 12bit convertion to not cross DMA
 				// buffer block boundary, removed old code for now
 				abort();
