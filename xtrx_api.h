@@ -214,6 +214,10 @@ typedef enum xtrx_antenna {
 
 	XTRX_RX_L_LB, // loopback
 	XTRX_RX_W_LB, // loopback
+
+	XTRX_RX_AUTO,  // automatic selection
+	XTRX_TX_AUTO,  // automatic selection
+
 } xtrx_antenna_t;
 
 XTRX_API int xtrx_set_antenna(struct xtrx_dev* dev, xtrx_antenna_t antenna);

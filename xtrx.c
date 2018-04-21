@@ -95,6 +95,10 @@ struct xtrx_dev {
 	unsigned            txtsp_interp;  /* Interpolation in TSP */
 
 	uint64_t            master_ts;
+	xtrx_antenna_t      rx_lna_auto;
+	xtrx_antenna_t      tx_lna_auto;
+	double              rx_lo;
+	double              tx_lo;
 
 	char                rxinit;
 	xtrx_host_format_t  rx_hostfmt;
@@ -294,6 +298,10 @@ int xtrx_open(const char* device, unsigned flags, struct xtrx_dev** outdev)
 
 	dev->refclock = 0;
 	dev->clock_source = XTRX_CLKSRC_INT;
+	dev->rx_lna_auto = true;
+	dev->tx_lna_auto = true;
+	dev->rx_lo = 0;
+	dev->tx_lo = 0;
 	*outdev = dev;
 	return 0;
 
@@ -333,6 +341,61 @@ void xtrx_set_ref_clk(struct xtrx_dev* dev, unsigned refclkhz, xtrx_clock_source
 {
 	dev->clock_source = clksrc;
 	dev->refclock = refclkhz;
+}
+
+static int _xtrx_set_lna(struct xtrx_dev* dev, int band, bool tx)
+{
+	int i = 0;
+	LMS7002M_chan_t ch = LMS_CHAB;
+	if (tx) {
+		LMS7002M_trf_select_band(dev->lmsdrv[i].lms7, ch, band);
+		dev->txant = (band == 1) ? 1 : 0;
+	} else {
+		LMS7002M_rfe_set_path(dev->lmsdrv[i].lms7, ch, band);
+		if (0) {
+			dev->rxant = (band == LMS7002M_RFE_LNAW) ? 0 :
+						 (band == LMS7002M_RFE_LNAH) ? 1 :
+						 (band == LMS7002M_RFE_LNAL) ? 2 : 3;
+		} else {
+			dev->rxant = (band == LMS7002M_RFE_LNAW) ? 0 :
+						 (band == LMS7002M_RFE_LNAH) ? 2 :
+						 (band == LMS7002M_RFE_LNAL) ? 1 : 3;
+		}
+	}
+
+	return xtrxll_lms7_ant(dev->lldev, dev->rxant, dev->txant);
+}
+
+
+enum sigtype {
+	XTRX_TX_LO_CHANGED,
+	XTRX_RX_LO_CHANGED,
+	XTRX_TX_LNA_CHANGED,
+	XTRX_RX_LNA_CHANGED,
+};
+
+static int _xtrx_signal_event(struct xtrx_dev* dev, enum sigtype t)
+{
+	switch (t) {
+	case XTRX_RX_LO_CHANGED:
+	case XTRX_RX_LNA_CHANGED:
+		if (dev->rx_lna_auto) {
+			int band = (dev->rx_lo > 2200e6) ? LMS7002M_RFE_LNAH :
+					   (dev->rx_lo > 1500e6) ? LMS7002M_RFE_LNAW : LMS7002M_RFE_LNAL;
+			XTRXLL_LOG(XTRXLL_INFO, "Auto RX band selection: %c\n", band);
+			return _xtrx_set_lna(dev, band, false);
+		}
+		break;
+	case XTRX_TX_LO_CHANGED:
+	case XTRX_TX_LNA_CHANGED:
+		if (dev->tx_lna_auto) {
+			int band = (dev->tx_lo > 2200e6) ? 2 : 1;
+			XTRXLL_LOG(XTRXLL_INFO, "Auto TX band selection: %d\n", band);
+			return _xtrx_set_lna(dev, band, true);
+		}
+		break;
+	}
+	return 0;
 }
 
 
@@ -561,6 +624,15 @@ int xtrx_set_samplerate(struct xtrx_dev* dev,
 		return -EINVAL;
 	}
 
+	// TODO FIXME
+	//bool update_running = false;
+	if (dev->rx_run || dev->tx_run) {
+		if (!(flags & XTRX_SAMPLERATE_FORCE_UPDATE))
+			return -EPERM;
+
+		//update_running = true;
+	}
+
 	// Store all data for correct NCO calculations
 	dev->rxcgen_div = adcdiv_fixed;
 	dev->txcgen_div = dacdiv;
@@ -609,20 +681,11 @@ int xtrx_set_samplerate(struct xtrx_dev* dev,
 		dev->masterclock = actualmaster;
 	}
 
-	// TODO FIXME
-	bool update_running = false;
-	if (dev->rx_run || dev->tx_run) {
-		if (~(flags & XTRX_SAMPLERATE_FORCE_UPDATE))
-			return res;
-
-		update_running = true;
-	}
-
-	if (!update_running) {
+	//if (!update_running) {
 		LMS7002M_reset(dev->lmsdrv[0].lms7);
 		usleep(10000);
 		LMS7002M_lml_en(dev->lmsdrv[0].lms7);
-	}
+	//}
 
 	// 2. Set LML RX
 	unsigned rxtsp_div = 1;
@@ -861,6 +924,28 @@ int xtrx_tune_ex(struct xtrx_dev* dev, xtrx_tune_t type, xtrx_channel_t ch, doub
 	}
 
 	res = LMS7002M_set_lo_freq(dev->lmsdrv[i].lms7, dir, dev->refclock, freq, actualfreq);
+	if (res == 0) {
+		if (type == XTRX_TUNE_TX_AND_RX_TDD) {
+			dev->rx_lo = dev->tx_lo = *actualfreq;
+		} else {
+			if (dir == LMS_TX) {
+				dev->tx_lo = *actualfreq;
+			} else {
+				dev->rx_lo = *actualfreq;
+			}
+		}
+
+		if (type == XTRX_TUNE_TX_AND_RX_TDD || type == XTRX_TUNE_RX_FDD) {
+			res = _xtrx_signal_event(dev, XTRX_RX_LO_CHANGED);
+			if (res)
+				return res;
+		}
+		if (type == XTRX_TUNE_TX_AND_RX_TDD || type == XTRX_TUNE_TX_FDD) {
+			res = _xtrx_signal_event(dev, XTRX_TX_LO_CHANGED);
+			if (res)
+				return res;
+		}
+	}
 
 	if (type == XTRX_TUNE_TX_AND_RX_TDD) {
 		LMS7002M_sxt_to_sxr(dev->lmsdrv[i].lms7, true);
@@ -969,10 +1054,8 @@ int xtrx_set_gain(struct xtrx_dev* dev, xtrx_channel_t xch, xtrx_gain_type_t gt,
 
 int xtrx_set_antenna(struct xtrx_dev* dev, xtrx_antenna_t antenna)
 {
-	int i = 0;
 	int band;
 	int tx;
-	LMS7002M_chan_t ch = LMS_CHAB;
 
 	switch (antenna) {
 	case XTRX_RX_L: band = LMS7002M_RFE_LNAL; tx = 0; break;
@@ -986,26 +1069,17 @@ int xtrx_set_antenna(struct xtrx_dev* dev, xtrx_antenna_t antenna)
 	case XTRX_TX_L: band = 1; tx = 1; break; // FIXME!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
 	case XTRX_TX_W: band = 2; tx = 1; break; // FIXME!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
 
+	case XTRX_RX_AUTO: dev->rx_lna_auto = false; return _xtrx_signal_event(dev, XTRX_RX_LNA_CHANGED);
+	case XTRX_TX_AUTO: dev->tx_lna_auto = false; return _xtrx_signal_event(dev, XTRX_TX_LNA_CHANGED);
 	default: return -EINVAL;
 	}
 
 	if (tx) {
-		LMS7002M_trf_select_band(dev->lmsdrv[i].lms7, ch, band);
-		dev->txant = (band == 1) ? 1 : 0;
+		dev->tx_lna_auto = false;
 	} else {
-		LMS7002M_rfe_set_path(dev->lmsdrv[i].lms7, ch, band);
-		if (0) {
-			dev->rxant = (band == LMS7002M_RFE_LNAW) ? 0 :
-						 (band == LMS7002M_RFE_LNAH) ? 1 :
-						 (band == LMS7002M_RFE_LNAL) ? 2 : 3;
-		} else {
-			dev->rxant = (band == LMS7002M_RFE_LNAW) ? 0 :
-						 (band == LMS7002M_RFE_LNAH) ? 2 :
-						 (band == LMS7002M_RFE_LNAL) ? 1 : 3;
-		}
+		dev->rx_lna_auto = false;
 	}
-
-	return xtrxll_lms7_ant(dev->lldev, dev->rxant, dev->txant);
+	return _xtrx_set_lna(dev, band, tx);
 }
 
 /**
