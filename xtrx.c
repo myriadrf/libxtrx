@@ -523,13 +523,14 @@ int xtrx_set_samplerate(struct xtrx_dev* dev,
 		// For low sample rate increase DAC/ADC due to frequency aliasing
 		if ((rxrate > 1 && rxrate < 2e6) || (txrate > 1 && txrate < 2e6) || opt_decim_inter) {
 			for (; cgen_rate <= 320e6; cgen_rate *= 2) {
-				if ((rxrate > 1) && (((cgen_rate * 2 / (rxrate * rx_host_div)) / adcdiv_fixed) >= LMS7_DECIM_MAX))
+				unsigned rx_ndiv = (rxrate > 1) ? ((cgen_rate * 2 / (rxrate * rx_host_div)) / adcdiv_fixed) : 0;
+				unsigned tx_ndiv = (txrate > 1) ? ((cgen_rate * 2 / (txrate * tx_host_mul)) / dacdiv) : 0;
+
+				if (rx_ndiv > LMS7_DECIM_MAX || tx_ndiv > LMS7_INTER_MAX)
 					break;
 
-				if ((txrate > 1) && (((cgen_rate * 2 / (txrate * tx_host_mul)) / dacdiv) >= LMS7_INTER_MAX))
-					break;
-
-				XTRXLL_LOG(XTRXLL_INFO, "Increase CGEN %.3f Mhz", cgen_rate * 2);
+				XTRXLL_LOG(XTRXLL_INFO, "Increase RXdiv=%2d TXdiv=%2d => CGEN %03.1f Mhz\n",
+						   rx_ndiv, tx_ndiv, cgen_rate * 2 / 1.0e6);
 			}
 		}
 	}
@@ -1867,6 +1868,7 @@ int xtrx_recv_sync_ex(struct xtrx_dev* dev, xtrx_recv_ex_info_t* info)
 					continue;
 				case -EINTR: /* operation was cancelled */
 				case -EAGAIN:
+				case -EPIPE: /* logic error! */
 					return res;
 				case 0:
 					goto got_buffer;
