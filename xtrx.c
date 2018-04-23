@@ -542,7 +542,7 @@ int xtrx_set_samplerate(struct xtrx_dev* dev,
 
 		for (i = 0; i < sizeof(base_refclk) / sizeof(base_refclk[0]); i++) {
 			int diff = base_refclk[i] - osc;
-			if (abs(diff) * (int64_t)1000 / base_refclk[i] < 1) {
+			if (abs(diff) * (int64_t)100 / base_refclk[i] < 1) {
 				dev->refclock = base_refclk[i];
 				XTRXLL_LOG(XTRXLL_INFO, "xtrx_set_samplerate: set RefClk to %d based on %d measurement\n",
 						   (int)dev->refclock, osc);
