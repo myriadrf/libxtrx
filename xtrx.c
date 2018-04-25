@@ -857,6 +857,7 @@ int xtrx_tune_ex(struct xtrx_dev* dev, xtrx_tune_t type, xtrx_channel_t ch, doub
 	int i = 0, res;
 	LMS7002M_dir_t dir;
 	bool nco = false;
+	double res_freq = 0;
 
 	switch (type) {
 	case XTRX_TUNE_RX_FDD:
@@ -923,15 +924,19 @@ int xtrx_tune_ex(struct xtrx_dev* dev, xtrx_tune_t type, xtrx_channel_t ch, doub
 		LMS7002M_sxx_enable(dev->lmsdrv[i].lms7, LMS_RX, false);
 	}
 
-	res = LMS7002M_set_lo_freq(dev->lmsdrv[i].lms7, dir, dev->refclock, freq, actualfreq);
+
+	res = LMS7002M_set_lo_freq(dev->lmsdrv[i].lms7, dir, dev->refclock, freq, &res_freq);
 	if (res == 0) {
+		if (actualfreq)
+			*actualfreq = res_freq;
+
 		if (type == XTRX_TUNE_TX_AND_RX_TDD) {
-			dev->rx_lo = dev->tx_lo = *actualfreq;
+			dev->rx_lo = dev->tx_lo = res_freq;
 		} else {
 			if (dir == LMS_TX) {
-				dev->tx_lo = *actualfreq;
+				dev->tx_lo = res_freq;
 			} else {
-				dev->rx_lo = *actualfreq;
+				dev->rx_lo = res_freq;
 			}
 		}
 
@@ -945,12 +950,15 @@ int xtrx_tune_ex(struct xtrx_dev* dev, xtrx_tune_t type, xtrx_channel_t ch, doub
 			if (res)
 				return res;
 		}
+	} else {
+		goto err_check;
 	}
 
 	if (type == XTRX_TUNE_TX_AND_RX_TDD) {
 		LMS7002M_sxt_to_sxr(dev->lmsdrv[i].lms7, true);
 	}
 
+err_check:
 	switch (res) {
 	case -1: return -EINVAL;
 	case -2: XTRXLL_LOG(XTRXLL_ERROR, "No freq\n"); return -ERANGE;
