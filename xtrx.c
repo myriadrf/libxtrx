@@ -556,7 +556,7 @@ int xtrx_set_samplerate(struct xtrx_dev* dev,
 		}
 	}
 
-	if ((txrate > 1) && ((txrate < MIN_TX_RATE) || (flags & XTRX_SAMPLERATE_FORCE_TX_INTR))) {
+	if ((tx_gen) && ((txrate > 1) && ((txrate < MIN_TX_RATE) || (flags & XTRX_SAMPLERATE_FORCE_TX_INTR)))) {
 		do {
 			tx_host_mul <<= 1;
 			tx_host_inter++;
