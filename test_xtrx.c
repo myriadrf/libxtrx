@@ -302,6 +302,7 @@ int main(int argc, char** argv)
 	int tx_packet_size = 0;
 	int rx_packet_size = 0;
 	int vio = 0;
+	int tx_nodiscard = 0;
 
 	unsigned samples_flag = 0;
 	unsigned refclk = 0;
@@ -357,6 +358,7 @@ int main(int argc, char** argv)
 	{"txswapiq",no_argument,        0,   'Q' },
 	{"rxtsta",  no_argument,        0,   'a' },
 	{"txtsta",  no_argument,        0,   'A' },
+	{"txnodis", no_argument,        0,   'U' },
 	{0,         0,                  0,    0  }
 };
 
@@ -450,6 +452,8 @@ int main(int argc, char** argv)
 
 		case 'y': master_in = atof(optarg); break;
 		case 'Y': vio = atoi(optarg); break;
+
+		case 'U': tx_nodiscard = 1; break;
 		default: /* '?' */
 			fprintf(stderr, "Usage: %s <options>\n", argv[0]);
 			generate_help(long_options);
@@ -621,7 +625,18 @@ int main(int argc, char** argv)
 		fprintf(stderr, "Failed xtrx_run: %d\n", res);
 		goto falied_tune;
 	}
-
+/*
+	res = xtrx_val_set(dev, XTRX_TRX, XTRX_CH_AB, XTRX_DSPFE_CMD, (0<<27) | 511);
+	if (res) {
+		fprintf(stderr, "Failed xtrx_val_set(XTRX_DSPFE_CMD): %d\n", res);
+		goto falied_tune;
+	}
+	res = xtrx_val_set(dev, XTRX_TRX, XTRX_CH_AB, XTRX_DSPFE_CMD, (1<<27) | (1<<16));
+	if (res) {
+		fprintf(stderr, "Failed xtrx_val_set(XTRX_DSPFE_CMD): %d\n", res);
+		goto falied_tune;
+	}
+*/
 	if (dmatx && dmarx) {
 		res = pthread_create(&sendthread, NULL, send_thread_func1, dev);
 		if (res) {
@@ -746,9 +761,12 @@ falied_stop_rx:
 				const void *buffers[2] = { (void*)&buf[0], (void*)&buf[0] };
 				nfo.samples = rem / ((mimomode) ? 2 : 1);
 				nfo.flags = XTRX_TX_DONT_BUFFER;
+				if (tx_nodiscard)
+					nfo.flags |= XTRX_TX_NO_DISCARD;
 				nfo.ts = tx_start_ts + tx_sent_samples;
 				nfo.buffers = buffers;
 				nfo.buffer_count = (mimomode) ? 2 : 1;
+				nfo.timeout = 0;
 
 				uint64_t sa = grtime();
 				uint64_t da = sa - sp;
@@ -785,7 +803,7 @@ falied_stop_tx:
 	}
 
 	if (dump_regs) {
-		xtrx_debug_dump_lms(dev, "outlms.ini");
+		//xtrx_debug_dump_lms(dev, "outlms.ini");
 	}
 
 	s_stopflag = 1;
@@ -828,7 +846,7 @@ falied_stop_tx:
 falied_tune:
 falied_samplerate:
 	if (dump_regs) {
-		xtrx_debug_dump_lms(dev, "outerrlms.ini");
+		//xtrx_debug_dump_lms(dev, "outerrlms.ini");
 	}
 	xtrx_close(dev);
 falied_open:

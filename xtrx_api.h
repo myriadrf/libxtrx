@@ -255,6 +255,11 @@ typedef enum xtrx_run_sp_flags {
 	 * ability to switch at runtine, otherwise ignore */
 	XTRX_RSP_SISO_MODE      = 32,
 	XTRX_RSP_SCALE          = 64,
+	XTRX_RSP_NO_DC_CORR     = 128,
+	XTRX_RSP_SWAP_IQB       = 256, /* swap IQ only in one channel B */
+
+	XTRX_STREAMDSP_1        = 512,
+	XTRX_STREAMDSP_2        = 1024,
 } xtrx_run_sp_flags_t;
 
 typedef struct xtrx_run_stream_params {
@@ -317,6 +322,8 @@ enum xtrx_send_ex_flags {
 	XTRX_TX_DONT_BUFFER = 4,
 
 	XTRX_TX_TIMEOUT = 8,
+
+	XTRX_TX_NO_DISCARD = 16,
 };
 
 typedef struct xtrx_send_ex_info {
@@ -408,9 +415,11 @@ typedef enum xtrx_val {
 	XTRX_BOARD_TEMP,
 	XTRX_IC_TEMP,
 	XTRX_OSC_LATCH_1PPS,
-	XTRX_REF_XO_DAC,
+	XTRX_WAIT_1PPS,
+	XTRX_REF_REFCLK,
 	XTRX_LML_PHY_PHASE,
 	XTRX_LML_PHY_FBPHASE,
+	XTRX_DSPFE_CMD,
 
 	/* Performance counters */
 	XTRX_PERF_SAMPLES = 0x3000,
@@ -420,6 +429,7 @@ typedef enum xtrx_val {
 	/* Direct access to RFIC regs, xtrx_direction_t ignored and chan
 	 *  is used as index to RFIC onboard */
 	XTRX_RFIC_REG_0 = 0x10000000,
+	XTRX_FE_CUSTOM_0 = 0x20000000,
 } xtrx_val_t;
 
 XTRX_API int xtrx_val_set(struct xtrx_dev* dev, xtrx_direction_t dir,
@@ -430,13 +440,6 @@ XTRX_API int xtrx_val_get(struct xtrx_dev* dev, xtrx_direction_t dir,
 
 
 /* Misc & Debug functions */
-
-/** Dump internal LMS7 state to file for debugging purposes
- * @param dev
- * @param path
- * @return
- */
-XTRX_API int xtrx_debug_dump_lms(struct xtrx_dev* dev, const char* path);
 
 #ifdef __cplusplus
 }

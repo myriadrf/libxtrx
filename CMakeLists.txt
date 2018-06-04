@@ -52,6 +52,8 @@ else()
 	message(WARNING "Unknown system type is ${CMAKE_SYSTEM_NAME}")
 endif()
 
+option(LMS_FE_OLD "Use LIBLMS7002M as LMS Frontend" NO)
+
 add_definitions(-Wall -g)
 
 set(XTRX_LIBRARY_DIR      lib${LIB_SUFFIX})
@@ -72,26 +74,54 @@ if(CMAKE_COMPILER_IS_GNUCC)
 	add_definitions("-Wl,-z,defs")
 endif(CMAKE_COMPILER_IS_GNUCC)
 
-find_package(libLMS7002M REQUIRED)
 find_package(libxtrxdsp REQUIRED)
 find_package(libxtrxll REQUIRED)
 
-include_directories(${LIBLMS7002M_INCLUDE_DIRS})
 include_directories(${LIBXTRXDSP_INCLUDE_DIRS})
 include_directories(${LIBXTRXLL_INCLUDE_DIRS})
 
 
-add_library(xtrx SHARED xtrx.c)
-target_link_libraries(xtrx ${LIBLMS7002M_LIBRARIES} ${LIBXTRXLL_LIBRARIES} ${LIBXTRXDSP_LIBRARIES} m)
+if(LMS_FE_OLD)
+    find_package(libLMS7002M REQUIRED)
+    include_directories(${LIBLMS7002M_INCLUDE_DIRS})
+
+    set(LMS_FE_FILENAME "xtrx_fe_lms7.c")
+    set(LMS_FE_LIBRARY  ${LIBLMS7002M_LIBRARIES})
+else()
+    find_package(liblms7compact REQUIRED)
+    include_directories(${LIBLMS7COMPACT_INCLUDE_DIRS})
+
+    add_definitions(-DHAVE_LMS_NFE)
+    set(LMS_FE_FILENAME "xtrx_fe_nlms7.c")
+    set(LMS_FE_LIBRARY  ${LIBLMS7COMPACT_LIBRARIES})
+endif()
+
+add_library(xtrx SHARED xtrx.c xtrx_debug.c xtrx_fe.c ${LMS_FE_FILENAME})
+target_link_libraries(xtrx ${LIBXTRXLL_LIBRARIES} ${LIBXTRXDSP_LIBRARIES} ${LMS_FE_LIBRARY} m)
+
 set_target_properties(xtrx PROPERTIES VERSION ${LIBVER} SOVERSION ${MAJOR_VERSION})
 
 add_executable(test_xtrx test_xtrx.c)
 target_link_libraries(test_xtrx xtrx ${SYSTEM_LIBS})
 
+########################################################################
+# XTRX QT examples
+########################################################################
+find_package(Qt5Widgets)
+find_package(Qt5PrintSupport)
+find_package(QCustomPlot)
+if (Qt5Widgets_FOUND AND Qt5PrintSupport_FOUND AND QCustomPlot_FOUND)
+    set(LIBXTRX_FOUND TRUE "libxtrx found")
+    set(LIBXTRX_LIBRARIES xtrx)
+    set(LIBXTRX_INCLUDE_DIRS ${CMAKE_CURRENT_SOURCE_DIRECTORY})
+    add_subdirectory(examples/xtrx_fft)
+endif()
 
+########################################################################
+# install libraries
+########################################################################
 install(TARGETS xtrx DESTINATION ${XTRX_LIBRARY_DIR})
 install(TARGETS test_xtrx DESTINATION ${XTRX_UTILS_DIR})
-
 
 ########################################################################
 # install headers
