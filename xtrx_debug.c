@@ -26,10 +26,11 @@
 #include <string.h>
 #include <memory.h>
 #include <signal.h>
-
+#ifndef WIN32
 #include <sys/un.h>
-
 #include <sys/socket.h>
+#endif
+
 #include <sys/types.h>
 #include <sys/stat.h>
 
@@ -110,13 +111,13 @@ fail:
 	}
 }
 
+#ifndef WIN32
 static void* _xtrx_thread(void* param)
 {
 	int ret;
 	struct sockaddr_un name;
 	xtrx_debug_ctx_t* ctx = (xtrx_debug_ctx_t*)param;
 	XTRXLL_LOG(XTRXLL_INFO, "Starting XTRX debug thread\n");
-
 	pthread_setcanceltype(PTHREAD_CANCEL_DEFERRED, NULL);
 	const char* fifoname = "xtrx_debug_pipe";
 	unlink(fifoname);
@@ -204,6 +205,7 @@ connection_closed:;
 	}
 	return NULL;
 }
+#endif
 
 
 int xtrx_debug_init(const char *params,
@@ -211,6 +213,7 @@ int xtrx_debug_init(const char *params,
 					void *obj,
 					xtrx_debug_ctx_t** octx)
 {
+#ifndef WIN32
 	int res;
 	const char* fifoname = "xtrx_debug_pipe";
 	int fd = mkfifo(fifoname, 0666);
@@ -238,11 +241,15 @@ int xtrx_debug_init(const char *params,
 failed_create_thread:
 	free(ctx);
 	return res;
+#else
+	return 0;
+#endif
 }
 
 
 int xtrx_debug_free(xtrx_debug_ctx_t* ctx)
 {
+#ifndef WIN32
 	close(ctx->fd);
 
 	pthread_cancel(ctx->debug_thread);
@@ -251,6 +258,6 @@ int xtrx_debug_free(xtrx_debug_ctx_t* ctx)
 	if (ctx->clifd != -1)
 		close(ctx->clifd);
 	free(ctx);
-
+#endif
 	return 0;
 }

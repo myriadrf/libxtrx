@@ -110,7 +110,7 @@ target_link_libraries(test_xtrx xtrx ${SYSTEM_LIBS})
 find_package(Qt5Widgets)
 find_package(Qt5PrintSupport)
 find_package(QCustomPlot)
-if (Qt5Widgets_FOUND AND Qt5PrintSupport_FOUND AND QCustomPlot_FOUND)
+if(Qt5Widgets_FOUND AND Qt5PrintSupport_FOUND AND QCustomPlot_FOUND)
     set(LIBXTRX_FOUND TRUE "libxtrx found")
     set(LIBXTRX_LIBRARIES xtrx)
     set(LIBXTRX_INCLUDE_DIRS ${CMAKE_CURRENT_SOURCE_DIRECTORY})
@@ -132,7 +132,12 @@ install(FILES
 
 option(ENABLE_SOAPY "Enable SOAPY plugin for XTRX" ON)
 if(ENABLE_SOAPY)
-	add_subdirectory(soapy)
+	find_package(SoapySDR)
+	if(SoapySDR_FOUND)
+		add_subdirectory(soapy)
+	else()
+		message(WARNING "SoapySDR hasn't been found -- ignoring SOAPY plugin")
+	endif()
 endif(ENABLE_SOAPY)
 
 ########################################################################
