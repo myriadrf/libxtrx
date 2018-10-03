@@ -52,7 +52,7 @@ else()
 	message(WARNING "Unknown system type is ${CMAKE_SYSTEM_NAME}")
 endif()
 
-option(LMS_FE_OLD "Use LIBLMS7002M as LMS Frontend" ON)
+option(LMS_FE_OLD "Use LIBLMS7002M as LMS Frontend" OFF)
 
 add_definitions(-Wall -g)
 
