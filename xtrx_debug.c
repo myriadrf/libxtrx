@@ -22,6 +22,8 @@
 #include "xtrx_debug.h"
 
 #include <stdio.h>
+#include <stdint.h>
+#include <inttypes.h>
 #include <stdlib.h>
 #include <string.h>
 #include <memory.h>
@@ -105,7 +107,7 @@ int xtrx_debug_process_cmd(xtrx_debug_ctx_t* ctx, const char *cmd, unsigned len,
 
 fail:
 	if (res == 0) {
-		return snprintf(reply, rlen, "OK,%016lx\n", oval);
+		return snprintf(reply, rlen, "OK,%016" PRId64 "\n", oval);
 	} else {
 		return snprintf(reply, rlen, "FAIL,%d\n", res);
 	}

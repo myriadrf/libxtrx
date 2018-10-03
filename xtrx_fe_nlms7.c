@@ -519,7 +519,7 @@ int lms7nfe_dd_set_samplerate(struct xtrx_fe_obj* obj,
 	double rxmaster_min = dacdiv * inrates->dac.hwrate;
 	cgen_rate = MAX(txmaster_min, rxmaster_min);
 
-	XTRXLL_LOG(XTRXLL_ERROR, "xtrx_set_samplerate: TXm = %.3f RXm = %.3f\n",
+	XTRXLL_LOG(XTRXLL_DEBUG, "xtrx_set_samplerate: TXm = %.3f RXm = %.3f\n",
 			   txmaster_min / 1e6, rxmaster_min / 1e6);
 
 	// TODO: determine best possible combination of adcdiv / dacdiv, just
@@ -553,15 +553,17 @@ int lms7nfe_dd_set_samplerate(struct xtrx_fe_obj* obj,
 
 	if (rxrate > 1 && !_check_lime_decimation(rxdiv)) {
 		XTRXLL_LOG(XTRXLL_ERROR, "xtrx_set_samplerate: can't deliver "
-				   "decimation: %d of %.3f MHz CGEN and %.3f MHz samplerate\n",
-				   rxdiv, cgen_rate / 1e6, rxrate / 1e6);
+								 "decimation: %d of %.3f MHz CGEN and %.3f MHz samplerate; TXm = %.3f RXm = %.3f\n",
+				   rxdiv, cgen_rate / 1e6, rxrate / 1e6,
+				   txmaster_min / 1e6, rxmaster_min / 1e6);
 		return -EINVAL;
 	}
 
 	if (txrate > 1 && !_check_lime_decimation(txdiv)) {
 		XTRXLL_LOG(XTRXLL_ERROR, "xtrx_set_samplerate: can't deliver "
-				   "interpolation: %d of %.3f MHz CGEN and %.3f MHz samplerate\n",
-				   txdiv, cgen_rate / 1e6, txrate / 1e6);
+								 "interpolation: %d of %.3f MHz CGEN and %.3f MHz samplerate; TXm = %.3f RXm = %.3f\n",
+				   txdiv, cgen_rate / 1e6, txrate / 1e6,
+				   txmaster_min / 1e6, rxmaster_min / 1e6);
 		return -EINVAL;
 	}
 
