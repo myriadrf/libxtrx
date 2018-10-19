@@ -162,7 +162,7 @@ void lms7_log(struct lms7_state* s, const char* fmt, ...)
 		logbuffer[0] = 0;
 	va_end(ap);
 
-	xtrxll_log(XTRXLL_WARNING, "RFIC_NLMS7", 0, "NLMS7 %s: %s\n",
+	xtrxll_log(XTRXLL_INFO, "RFIC_NLMS7", 0, "NLMS7 %s: %s\n",
 			   xtrxll_get_name(nfe->lldev), logbuffer);
 }
 
@@ -1281,7 +1281,7 @@ int lms7nfe_bb_set_freq(struct xtrx_fe_obj* obj,
 	if (res)
 		return res;
 
-	XTRXLL_LOG(XTRXLL_WARNING, "NCO ch=%d type=%d freq=%.f\n",
+	XTRXLL_LOG(XTRXLL_INFO, "NCO ch=%d type=%d freq=%.f\n",
 			   channel, type, freq);
 
 	if (actualfreq)

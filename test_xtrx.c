@@ -262,7 +262,7 @@ int main(int argc, char** argv)
 	const char* device = "/dev/xtrx0";
 
 	pthread_t sendthread;
-	int dump_regs = 0;
+	int multidev = 0;
 	double rxsamplerate = 4.0e6, actual_rxsample_rate = 0;
 	double txsamplerate = 4.0e6, actual_txsample_rate = 0;
 	double rxfreq = 900e6, rxactualfreq = 0;
@@ -270,7 +270,7 @@ int main(int argc, char** argv)
 	double rxbandwidth = 5e6, actual_rxbandwidth = 0;
 	double txbandwidth = 2e6, actual_txbandwidth = 0;
 	double lnagain = 15, actuallnagain = 0;
-	xtrx_channel_t ch = XTRX_CH_AB;
+	xtrx_channel_t ch = XTRX_CH_ALL;
 	xtrx_wire_format_t rx_wire_fmt = XTRX_WF_16;
 	xtrx_host_format_t rx_host_fmt = XTRX_IQ_INT16;
 	xtrx_wire_format_t tx_wire_fmt = XTRX_WF_16;
@@ -325,7 +325,7 @@ int main(int argc, char** argv)
 	{"extclk",  no_argument,       0,   'm' },
 	{"loglevel",required_argument, 0,   'l' },
 	{"logp",    required_argument, 0,   'L' },
-	{"dumpregs",no_argument,       0,   'd' },
+	{"multdevs",required_argument, 0,   'd' },
 	{"device",  required_argument, 0,   'D' },
 	{"samples", required_argument,  0,   'N' },
 	{"out",     required_argument,  0,   'O' },
@@ -392,7 +392,7 @@ int main(int argc, char** argv)
 		case 'm':	extclk = 1;					break;
 		case 'l':	loglevel = (atoi(optarg));	break;
 		case 'L': logp = (atoi(optarg));		break;
-		case 'd':	dump_regs = 1;				break;
+		case 'd': multidev = 1; device = optarg;break;
 		case 'D': device = optarg;				break;
 		case 'x':
 			switch (atoi(optarg)) {
@@ -492,7 +492,51 @@ int main(int argc, char** argv)
 		txsamplerate = 0;
 	}
 
-	char* data ;
+	unsigned dev_count;
+	int res;
+	if (multidev) {
+#define MAX_DEVS 32
+		if (device == NULL || strlen(device) < 1) {
+			// Do discovery
+			xtrx_device_info_t di[MAX_DEVS];
+			int cnt = xtrx_discovery(di, MAX_DEVS);
+			if (cnt < 0) {
+				fprintf(stderr, "Failed xtrx_discovery: %d\n", cnt);
+				return -1;
+			}
+			for (int i = 0; i < cnt; i++) {
+				printf("[%02d] %-16s %-16s %-16s %-16s\n", i,
+					   di[i].uniqname, di[i].devid, di[i].proto, di[i].speed);
+			}
+
+			return 0;
+		}
+
+		unsigned j;
+		char* str1;
+		char* saveptr1;
+		char* devices[MAX_DEVS];
+		for (j = 0, str1 = device; j < MAX_DEVS; j++, str1 = NULL) {
+			char* token = strtok_r(str1, ";", &saveptr1);
+			if (token == NULL)
+				break;
+			devices[j] = token;
+		}
+		fprintf(stderr, "Creating multidev for %d devices\n", j);
+		res = xtrx_open_multi(j, devices, loglevel, &dev);
+		dev_count = j;
+	} else {
+		res = xtrx_open(device, loglevel, &dev);
+		dev_count = 1;
+	}
+	if (res) {
+		fprintf(stderr, "Failed xtrx_open: %d\n", res);
+		goto falied_open;
+	}
+
+	char* data_bufs[MAX_DEVS];
+	char* data;
+#if 0
 	char* datab = NULL;
 	data = (char*)malloc(rx_sample_host_size * samples); // IQ * float * samples
 	memset(data, 0, rx_sample_host_size * samples);
@@ -500,12 +544,16 @@ int main(int argc, char** argv)
 	if (mimomode) {
 		datab = (data + rx_sample_host_size * samples / 2);
 	}
+#else
+	data = (char*)malloc(rx_sample_host_size * samples * dev_count);
+	unsigned chunck_size = (rx_sample_host_size * samples);
+	if (mimomode)
+		chunck_size >>= 1;
 
-	int res = xtrx_open(device, loglevel, &dev);
-	if (res) {
-		fprintf(stderr, "Failed xtrx_open: %d\n", res);
-		goto falied_open;
+	for (unsigned dc = 0; dc < ((mimomode) ? dev_count * 2 : dev_count); dc++) {
+		 data_bufs[dc] = data + dc * chunck_size;
 	}
+#endif
 
 	if (refclk || extclk) {
 		xtrx_set_ref_clk(dev, refclk, (extclk) ? XTRX_CLKSRC_EXT : XTRX_CLKSRC_INT);
@@ -646,6 +694,8 @@ int main(int argc, char** argv)
 	}
 
 	if (dmarx) {
+		void* stream_buffers[2 * MAX_DEVS];
+		unsigned buf_cnt = ((mimomode) ? dev_count * 2 : dev_count);
 		uint64_t zero_inserted = 0;
 		int overruns = 0;
 
@@ -655,16 +705,24 @@ int main(int argc, char** argv)
 		st = grtime();
 		for (uint64_t p = 0; p < cycles; p++) {
 			for (uint64_t h = 0; h < samples / rx_slice; h++) {
+				unsigned slize_off = h * rx_slice * rx_sample_host_size;
+				if (mimomode)
+					slize_off >>= 1;
 				xtrx_recv_ex_info_t ri;
 				size_t rem = samples - h * rx_slice;
 				if (rem > rx_slice)
 					rem = rx_slice;
-
+#if 0
 				void* buffers[2] = {(datab) ? ((char*)data) + h * rx_slice * rx_sample_host_size / 2 :   ((char*)data) + h * rx_slice * rx_sample_host_size,
 									(datab) ? ((char*)datab) + h * rx_slice * rx_sample_host_size / 2 : NULL };
-				ri.samples = rem / ((datab) ? 2 : 1);
-				ri.buffer_count = (datab) ? 2 : 1;
-				ri.buffers = buffers;
+#else
+				for (unsigned bc = 0; bc < buf_cnt; bc++) {
+					stream_buffers[bc] = data_bufs[bc] + slize_off;
+				}
+#endif
+				ri.samples = rem / ((mimomode) ? 2 : 1);
+				ri.buffer_count = buf_cnt;
+				ri.buffers = stream_buffers;
 				ri.flags = 0;
 
 				uint64_t sa = grtime();
@@ -673,7 +731,7 @@ int main(int argc, char** argv)
 				sp = grtime();
 				uint64_t sb = sp - sa;
 
-				abpkt += 1e9 * ri.samples * ri.buffer_count / actual_rxsample_rate  / (rx_siso ? 1 : 2);
+				abpkt += 1e9 * ri.samples * ri.buffer_count / dev_count / actual_rxsample_rate  / (rx_siso ? 1 : 2);
 
 				uint64_t dt = 0;
 				if (1) {
@@ -741,6 +799,12 @@ falied_stop_rx:
 			memcpy(&buf[sizeof(testbuf2)*j], testbuf2, sizeof(testbuf2));
 		}
 
+		void* stream_buffers[2 * MAX_DEVS];
+		unsigned buf_cnt = ((mimomode) ? dev_count * 2 : dev_count);
+		for (unsigned p = 0; p < buf_cnt; p++) {
+			stream_buffers[p] = (void*)&buf[0];
+		}
+
 		//unsigned txchs = (tx_siso ? 1 : 2);
 		uint64_t underruns = 0;
 		uint64_t tx_start_ts = s_tx_skip / (tx_siso ? 1 : 2);
@@ -758,14 +822,14 @@ falied_stop_rx:
 					rem = s_tx_slice;
 
 				xtrx_send_ex_info_t nfo;
-				const void *buffers[2] = { (void*)&buf[0], (void*)&buf[0] };
+				//const void *buffers[2] = { (void*)&buf[0], (void*)&buf[0] };
 				nfo.samples = rem / ((mimomode) ? 2 : 1);
 				nfo.flags = XTRX_TX_DONT_BUFFER;
 				if (tx_nodiscard)
 					nfo.flags |= XTRX_TX_NO_DISCARD;
 				nfo.ts = tx_start_ts + tx_sent_samples;
-				nfo.buffers = buffers;
-				nfo.buffer_count = (mimomode) ? 2 : 1;
+				nfo.buffers = stream_buffers;
+				nfo.buffer_count = buf_cnt;
 				nfo.timeout = 0;
 
 				uint64_t sa = grtime();
@@ -774,7 +838,7 @@ falied_stop_rx:
 				sp = grtime();
 				uint64_t sb = sp - sa;
 
-				abpkt += 1e9 * nfo.samples * nfo.buffer_count / actual_txsample_rate / (tx_siso ? 1 : 2);
+				abpkt += 1e9 * nfo.samples * nfo.buffer_count / dev_count / actual_txsample_rate / (tx_siso ? 1 : 2);
 
 				if (logp == 0 || p % s_logp == 0)
 					fprintf(stderr, "PROCESSED TX SLICE %" PRIu64 "/%" PRIu64 ": res %d TS:%8" PRIu64 " %c%c  %6" PRId64 " us DELTA %6" PRId64 " us LATE %6" PRId64 " us  %d samples\n",
@@ -788,7 +852,7 @@ falied_stop_rx:
 				}
 
 				//tx_sent_samples += nfo.out_samples * nfo.buffer_count / (tx_siso ? 1 : 2);
-				tx_sent_samples += nfo.samples * nfo.buffer_count / (tx_siso ? 1 : 2);
+				tx_sent_samples += nfo.samples * (nfo.buffer_count / dev_count) / (tx_siso ? 1 : 2);
 				if (nfo.out_flags) {
 					underruns ++;
 				}
@@ -800,10 +864,6 @@ falied_stop_tx:
 		s_tx_cycles = p * (samples / s_tx_slice);
 		s_tx_tm = tm;
 		fprintf(stderr, "TX Underruns:%" PRIu64 "\n", underruns);
-	}
-
-	if (dump_regs) {
-		//xtrx_debug_dump_lms(dev, "outlms.ini");
 	}
 
 	s_stopflag = 1;
@@ -831,10 +891,10 @@ falied_stop_tx:
 
 	if (outstream && dmarx) {
 		if (mimomode) {
-			write(outstream, data, rx_sample_host_size * samples / 2);
-			write(outstream, datab, rx_sample_host_size * samples / 2);
+			//write(outstream, data, rx_sample_host_size * samples / 2);
+			//write(outstream, datab, rx_sample_host_size * samples / 2);
 		} else {
-			write(outstream, data, rx_sample_host_size * samples);
+			//write(outstream, data, rx_sample_host_size * samples);
 		}
 	}
 
@@ -845,10 +905,8 @@ falied_stop_tx:
 	xtrx_stop(dev, XTRX_TRX);
 falied_tune:
 falied_samplerate:
-	if (dump_regs) {
-		//xtrx_debug_dump_lms(dev, "outerrlms.ini");
-	}
 	xtrx_close(dev);
 falied_open:
+	free(data);
 	return res;
 }

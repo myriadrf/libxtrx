@@ -70,6 +70,15 @@ enum xtrx_dd_ops {
 	XTRX_FEDD_RESET,
 };
 
+// Tree like handles
+struct xtrx_handle_info_t {
+	unsigned handle_id;
+	const char* cname;
+	const char* const* aliases;
+	unsigned flags;
+	struct xtrx_handle_info_t* parent;
+};
+
 
 struct xtrx_fe_ops
 {

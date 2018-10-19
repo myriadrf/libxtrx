@@ -70,6 +70,8 @@ typedef struct xtrx_open_params {
  */
 XTRX_API int xtrx_open(const char* device, unsigned flags, struct xtrx_dev** dev);
 
+XTRX_API int xtrx_open_multi(unsigned numdevs, const char** devices, unsigned flags, struct xtrx_dev** dev);
+
 /** Close XTRX device
  * @param dev       XTRX device handle
  */
@@ -158,6 +160,7 @@ typedef enum xtrx_channel {
 	XTRX_CH_A  = 1,
 	XTRX_CH_B  = 2,
 	XTRX_CH_AB = XTRX_CH_A | XTRX_CH_B,
+	XTRX_CH_ALL = ~0U,
 } xtrx_channel_t;
 
 

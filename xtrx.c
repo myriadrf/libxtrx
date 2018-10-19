@@ -47,9 +47,9 @@ struct xtrx_multill_stream {
 
 	void*               buf;
 	size_t              buf_total;
-	size_t              buf_processed;    /** Number of processed samples (total for all channels) in the cached buffer */
-	uint64_t            buf_processed_ts; /** Number of samples (total for all channels) in the cached buffer */
-	uint64_t            buf_ts;           /** First sample number in the cached buffer */
+	size_t              buf_processed;    /**< Number of processed samples (total for all channels) in the cached buffer */
+	uint64_t            buf_processed_ts; /**< Number of samples (total for all channels) in the cached buffer */
+	uint64_t            buf_ts;           /**< First sample number in the cached buffer */
 	uint64_t            buf_conv_state;
 	unsigned            buf_len_iq_symbol;
 	unsigned            buf_len_iq_host_sym;
@@ -63,6 +63,9 @@ struct xtrx_multill_stream {
 };
 
 struct xtrx_dev {
+	unsigned dev_idx; //Index of the DEVICE structure in an array
+	unsigned dev_max; //Total number of linked XTRX devices
+
 	struct xtrxll_dev* lldev;
 	struct xtrx_fe_obj* fe;
 	xtrx_debug_ctx_t* debugif;
@@ -79,9 +82,9 @@ struct xtrx_dev {
 
 	void*               rxbuf;
 	unsigned            rxbuf_total;
-	unsigned            rxbuf_processed;    /** Number of processed bytes (total for all channels) in the cached buffer */
-	uint64_t            rxbuf_processed_ts; /** Number of samples (in each device channel) in the cached buffer */
-	uint64_t            rxbuf_ts;           /** First sample number in the cached buffer */
+	unsigned            rxbuf_processed;    /**< Number of processed bytes (total for all channels) in the cached buffer */
+	uint64_t            rxbuf_processed_ts; /**< Number of samples (in each device channel) in the cached buffer */
+	uint64_t            rxbuf_ts;           /**< First sample number in the cached buffer */
 	uint64_t            rxbuf_conv_state;
 	unsigned            rxbuf_len_iq_symbol;
 	unsigned            rxbuf_len_iq_host_sym;
@@ -216,6 +219,8 @@ int xtrx_open(const char* device, unsigned flags, struct xtrx_dev** outdev)
 	}
 	memset(dev, 0, sizeof(struct xtrx_dev));
 
+	dev->dev_idx = 0;
+	dev->dev_max = 1;
 	dev->lldev = lldev;
 	dev->refclock = 0;
 	dev->clock_source = XTRX_CLKSRC_INT;
@@ -230,8 +235,8 @@ int xtrx_open(const char* device, unsigned flags, struct xtrx_dev** outdev)
 
 	res = xtrx_debug_init(NULL, &_debug_ops, dev, &dev->debugif);
 	if (res) {
-		XTRXLL_LOG(XTRXLL_ERROR, "Failed to initialize debug service: err=%d\n", res);
-		goto failed_fe;
+		XTRXLL_LOG(XTRXLL_WARNING, "Failed to initialize debug service: err=%d, debug service is disabled\n", res);
+		dev->debugif = NULL;
 	}
 
 	*outdev = dev;
@@ -246,23 +251,97 @@ failed_openll:
 	return res;
 }
 
+enum {
+	XTRX_DEVS_MAX = 32
+};
+int xtrx_open_multi(unsigned numdevs, const char** devices, unsigned flags, struct xtrx_dev** outdev)
+{
+	int res;
+	int loglevel = flags & XTRX_O_LOGLVL_MASK;
+	xtrxll_set_loglevel(loglevel);
+
+	if (numdevs > XTRX_DEVS_MAX || numdevs == 0) {
+		XTRXLL_LOG(XTRXLL_ERROR, "Incorrect number of XTRXes in the multidevice: %d!\n", numdevs);
+		return -EINVAL;
+	}
+
+	struct xtrxll_dev* lldev[XTRX_DEVS_MAX];
+	for (unsigned num = 0; num < numdevs; num++) {
+		res = xtrxll_open(devices[num], XTRXLL_FULL_DEV_MATCH, &lldev[num]);
+		if (res) {
+			for (; num > 0; num--) {
+				xtrxll_close(lldev[num - 1]);
+			}
+			return res;
+		}
+	}
+
+	xtrxdsp_init();
+
+	//All devices are claimed
+	struct xtrx_dev* dev = (struct xtrx_dev*)malloc(sizeof(struct xtrx_dev) * numdevs);
+	if (dev == NULL) {
+		res = -errno;
+		goto failed_mem;
+	}
+	memset(dev, 0, sizeof(struct xtrx_dev) * numdevs);
+
+	for (unsigned num = 0; num < numdevs; num++) {
+		dev[num].dev_idx = num;
+		dev[num].dev_max = numdevs;
+		dev[num].lldev = lldev[num];
+		dev[num].refclock = 0;
+		dev[num].clock_source = XTRX_CLKSRC_INT;
+
+		res = xtrx_fe_init(lldev[num], flags, &dev[num].fe);
+		if (res) {
+			XTRXLL_LOG(XTRXLL_ERROR, "Failed to initialize frontend: err=%d on dev %d/%d\n",
+					   res, num, numdevs);
+			for (; num > 0; num--) {
+				dev[num - 1].fe->ops->fe_deinit(dev[num - 1].fe);
+			}
+			goto failed_fe;
+		}
+	}
+
+	res = xtrx_debug_init(NULL, &_debug_ops, dev, &dev->debugif);
+	if (res) {
+		XTRXLL_LOG(XTRXLL_WARNING, "Failed to initialize debug service: err=%d\n", res);
+	}
+
+	*outdev = dev;
+	return 0;
+
+failed_fe:
+	free(dev);
+failed_mem:
+	for (unsigned num = 0; num < numdevs; num++) {
+		xtrxll_close(lldev[num]);
+	}
+	return res;
+}
+
+
 void xtrx_close(struct xtrx_dev* dev)
 {
 	if (dev->debugif) {
 		xtrx_debug_free(dev->debugif);
 	}
 
-	dev->fe->ops->fe_deinit(dev->fe);
-
-	xtrxll_close(dev->lldev);
+	for (unsigned devnum = 0; devnum < dev->dev_max; devnum++) {
+		dev[devnum].fe->ops->fe_deinit(dev[devnum].fe);
+		xtrxll_close(dev[devnum].lldev);
+	}
 
 	free(dev);
 }
 
 void xtrx_set_ref_clk(struct xtrx_dev* dev, unsigned refclkhz, xtrx_clock_source_t clksrc)
 {
-	dev->clock_source = clksrc;
-	dev->refclock = refclkhz;
+	for (unsigned devnum = 0; devnum < dev->dev_max; devnum++) {
+		dev[devnum].clock_source = clksrc;
+		dev[devnum].refclock = refclkhz;
+	}
 }
 
 
@@ -314,6 +393,36 @@ int xtrx_set_samplerate(struct xtrx_dev* dev,
 		}
 	}
 
+	// Check that other boards have the same settings
+	for (unsigned devnum = 1; devnum < dev->dev_max; devnum++) {
+		int nhwid, osc;
+		res = xtrxll_get_sensor(dev[devnum].lldev, XTRXLL_HWID, &nhwid);
+		if (res) {
+			XTRXLL_LOG(XTRXLL_ERROR, "xtrx_set_samplerate[%d]: unable to get HWID\n", devnum);
+			return res;
+		}
+		if (nhwid != hwid) {
+			XTRXLL_LOG(XTRXLL_ERROR, "xtrx_set_samplerate[%d]: board HWID: %08x != %08x on master board\n",
+					   devnum, nhwid, hwid);
+			return -EIO;
+		}
+		res = xtrxll_set_param(dev[devnum].lldev, XTRXLL_PARAM_EXT_CLK, (dev[devnum].clock_source) ? 1 : 0);
+		if (res) {
+			XTRXLL_LOG(XTRXLL_ERROR, "xtrx_set_samplerate[%d]: unable to set clock source\n", devnum);
+			return res;
+		}
+		res = xtrxll_get_sensor(dev[devnum].lldev, XTRXLL_REFCLK_CLK, &osc);
+		if (res) {
+			return res;
+		}
+		if (abs(dev->refclock - osc) * (int64_t)100 / dev->refclock > 1) {
+			XTRXLL_LOG(XTRXLL_ERROR, "xtrx_set_samplerate[%d]: RefClk %d doesn't look like %d on master!\n",
+					   devnum, osc, (int)dev->refclock);
+			return -EIO;
+		}
+		dev[devnum].refclock = dev->refclock;
+	}
+
 	struct xtrx_fe_samplerate inrates, outrates;
 	memset(&inrates, 0, sizeof(inrates));
 	memset(&inrates, 0, sizeof(outrates));
@@ -330,12 +439,14 @@ int xtrx_set_samplerate(struct xtrx_dev* dev,
 	inrates.hwid = hwid;
 	inrates.refclk_source = dev->clock_source;
 
-	res = dev->fe->ops->dd_set_samplerate(dev->fe, &inrates, &outrates);
-	if (res)
-		return res;
+	for (unsigned devnum = 0; devnum < dev->dev_max; devnum++) {
+		res = dev[devnum].fe->ops->dd_set_samplerate(dev[devnum].fe, &inrates, &outrates);
+		if (res)
+			return res;
 
-	dev->rx_host_decim = outrates.adc.host_di;
-	dev->tx_host_inter = outrates.dac.host_di;
+		dev[devnum].rx_host_decim = outrates.adc.host_di;
+		dev[devnum].tx_host_inter = outrates.dac.host_di;
+	}
 
 	if (actualcgen) {
 		*actualcgen = MAX(outrates.adc.hwrate  * 4, outrates.dac.hwrate  * 4);
@@ -352,21 +463,34 @@ int xtrx_set_samplerate(struct xtrx_dev* dev,
 int xtrx_tune(struct xtrx_dev* dev, xtrx_tune_t type, double freq,
 			  double *actualfreq)
 {
-	return xtrx_tune_ex(dev, type, XTRX_CH_AB, freq, actualfreq);
+	return xtrx_tune_ex(dev, type, XTRX_CH_ALL, freq, actualfreq);
 }
 
 int xtrx_tune_ex(struct xtrx_dev* dev, xtrx_tune_t type, xtrx_channel_t ch,
 				 double freq, double *actualfreq)
 {
+	int res;
 	switch (type) {
 	case XTRX_TUNE_RX_FDD:
 	case XTRX_TUNE_TX_FDD:
 	case XTRX_TUNE_TX_AND_RX_TDD:
-		return dev->fe->ops->fe_set_freq(dev->fe, ch, type, freq, actualfreq);
+		for (unsigned devnum = 0; devnum < dev->dev_max; devnum++) {
+			unsigned fe_ch = (ch >> (2 * devnum)) & XTRX_CH_AB;
+			res = dev[devnum].fe->ops->fe_set_freq(dev[devnum].fe, fe_ch, type, freq, actualfreq);
+			if (res)
+				return res;
+		}
+		return 0;
 
 	case XTRX_TUNE_BB_RX:
 	case XTRX_TUNE_BB_TX:
-		return dev->fe->ops->bb_set_freq(dev->fe, ch, type, freq, actualfreq);
+		for (unsigned devnum = 0; devnum < dev->dev_max; devnum++) {
+			unsigned fe_ch = (ch >> (2 * devnum)) & XTRX_CH_AB;
+			res = dev[devnum].fe->ops->bb_set_freq(dev[devnum].fe, fe_ch, type, freq, actualfreq);
+			if (res)
+				return res;
+		}
+		return 0;
 
 	default: return -EINVAL;
 	}
@@ -375,8 +499,15 @@ int xtrx_tune_ex(struct xtrx_dev* dev, xtrx_tune_t type, xtrx_channel_t ch,
 static int xtrx_tune_bandwidth(struct xtrx_dev* dev, xtrx_channel_t xch,
 							   int rbb, double bw, double *actualbw)
 {
+	int res;
 	unsigned type = (rbb) ? XTRX_TUNE_BB_RX : XTRX_TUNE_BB_TX;
-	return dev->fe->ops->bb_set_badwidth(dev->fe, xch, type, bw, actualbw);
+	for (unsigned devnum = 0; devnum < dev->dev_max; devnum++) {
+		unsigned fe_ch = (xch >> (2 * devnum)) & XTRX_CH_AB;
+		res = dev[devnum].fe->ops->bb_set_badwidth(dev[devnum].fe, fe_ch, type, bw, actualbw);
+		if (res)
+			return res;
+	}
+	return 0;
 }
 
 int xtrx_tune_tx_bandwidth(struct xtrx_dev* dev, xtrx_channel_t xch, double bw,
@@ -404,13 +535,26 @@ int xtrx_set_gain(struct xtrx_dev* dev, xtrx_channel_t xch, xtrx_gain_type_t gt,
 				  double gain, double *actualgain)
 {
 	// TODO BB/FE multiplexing
-	return dev->fe->ops->bb_set_gain(dev->fe, xch, gt, gain, actualgain);
+	int res;
+	for (unsigned devnum = 0; devnum < dev->dev_max; devnum++) {
+		unsigned fe_ch = (xch >> (2 * devnum)) & XTRX_CH_AB;
+		res = dev[devnum].fe->ops->bb_set_gain(dev[devnum].fe, fe_ch, gt, gain, actualgain);
+		if (res)
+			return res;
+	}
+	return 0;
 }
 
 
 int xtrx_set_antenna(struct xtrx_dev* dev, xtrx_antenna_t antenna)
 {
-	return dev->fe->ops->fe_set_lna(dev->fe, XTRX_CH_AB, 0, antenna);
+	int res;
+	for (unsigned devnum = 0; devnum < dev->dev_max; devnum++) {
+		res = dev[devnum].fe->ops->fe_set_lna(dev[devnum].fe, XTRX_CH_AB, 0, antenna);
+		if (res)
+			return res;
+	}
+	return 0;
 }
 
 /**
@@ -552,31 +696,34 @@ int xtrx_run_ex(struct xtrx_dev* dev, const xtrx_run_params_t* params)
 	struct xtrx_dd_params fe_params;
 	fe_params.dir = params->dir;
 	fe_params.nflags = params->nflags;
-	fe_params.rx.chs = params->rx.chs;
 	fe_params.rx.flags = params->rx.flags;
-	fe_params.tx.chs = params->tx.chs;
 	fe_params.tx.flags = params->tx.flags;
 
-	res = dev->fe->ops->dd_set_modes(dev->fe, XTRX_FEDD_CONFIGURE, &fe_params);
-	if (res)
-		return res;
+	for (unsigned devnum = 0; devnum < dev->dev_max; devnum++) {
+		fe_params.rx.chs = (params->rx.chs >> (2 * devnum)) & XTRX_CH_AB;
+		fe_params.tx.chs = (params->tx.chs >> (2 * devnum)) & XTRX_CH_AB;
+
+		res = dev[devnum].fe->ops->dd_set_modes(dev[devnum].fe, XTRX_FEDD_CONFIGURE, &fe_params);
+		if (res)
+			return res;
+	}
 
 	/* Validation of input parameters done, do the things */
-	if (params->dir & XTRX_RX) {
-		rx_start_ts = dev->rx_samples = params->rx_stream_start << dev->rx_host_decim;
+	if (params->dir & XTRX_RX) for (unsigned devnum = 0; devnum < dev->dev_max; devnum++) {
+		rx_start_ts = dev[devnum].rx_samples = params->rx_stream_start << dev[devnum].rx_host_decim;
 
-		if (!dev->rxinit) {
-			res = xtrxll_dma_rx_init(dev->lldev, chan, rx_bpkt_size, &rx_bpkt_size);
+		if (!dev[devnum].rxinit) {
+			res = xtrxll_dma_rx_init(dev[devnum].lldev, chan, rx_bpkt_size, &rx_bpkt_size);
 			if (res) {
 				goto failed_fe;
 			}
 			XTRXLL_LOG(XTRXLL_INFO, "RX ititialized to %d bytes paket size\n", rx_bpkt_size);
-			dev->rxinit = 1;
+			dev[devnum].rxinit = 1;
 		}
 
-		if (dev->rx_host_decim) {
+		if (dev[devnum].rx_host_decim) {
 			unsigned i;
-			if (dev->rx_host_decim != 1) {
+			if (dev[devnum].rx_host_decim != 1) {
 				res = -EINVAL;
 				goto failed_fe;
 			}
@@ -585,19 +732,19 @@ int xtrx_run_ex(struct xtrx_dev* dev, const xtrx_run_params_t* params)
 				for (res = 0, i = 0; i < rx_stream_count; i++) {
 					res |=  xtrxdsp_filter_initi(g_filter_int16_taps_64_2x,
 												 FILTER_TAPS_64,
-												 dev->rx_host_decim,
+												 dev[devnum].rx_host_decim,
 												 0,
 												 rx_bpkt_size / xtrx_wire_format_get_iq_size(params->rx.wfmt),
-												 &dev->rx_host_filter[i]);
+												 &dev[devnum].rx_host_filter[i]);
 				}
 			} else if (params->rx.hfmt == XTRX_IQ_FLOAT32) {
 				for (res = 0, i = 0; i < rx_stream_count; i++) {
 					res |=  xtrxdsp_filter_init(g_filter_float_taps_64_2x,
 												FILTER_TAPS_64,
-												dev->rx_host_decim,
+												dev[devnum].rx_host_decim,
 												0,
 												rx_bpkt_size / xtrx_wire_format_get_iq_size(params->rx.wfmt),
-												&dev->rx_host_filter[i]);
+												&dev[devnum].rx_host_filter[i]);
 				}
 			} else {
 				XTRXLL_LOG(XTRXLL_ERROR, "This RX host format is usnsupported for host filtering\n");
@@ -612,32 +759,32 @@ int xtrx_run_ex(struct xtrx_dev* dev, const xtrx_run_params_t* params)
 		}
 
 		// Accumulation isn't supported yet, so hardwire it
-		dev->rx_scale_16 = 1.0f / 2048;
+		dev[devnum].rx_scale_16 = 1.0f / 2048;
 		if (params->rx.flags & XTRX_RSP_SCALE) {
-			dev->rx_scale_16 *= params->rx.scale;
+			dev[devnum].rx_scale_16 *= params->rx.scale;
 		}
 
-		dev->rxbuf = NULL;
-		dev->rxbuf_total = 0;
-		dev->rxbuf_processed = 0;
-		dev->rxbuf_processed_ts = 0;
-		dev->rxbuf_conv_state = 0;
-		dev->rxbuf_len_iq_symbol = rx_stream_count * xtrx_wire_format_get_iq_size(params->rx.wfmt);
-		dev->rxbuf_len_iq_host_sym = rx_stream_count * xtrx_host_format_get_iq_size(params->rx.hfmt);
-		dev->rx_chans_in_stream = rx_stream_count;
-		dev->rx_run = true;
-		dev->rx_hostfmt = params->rx.hfmt;
-		dev->rx_busfmt = params->rx.wfmt;
-		dev->rx_fefmt = rx_fe_fmt;
+		dev[devnum].rxbuf = NULL;
+		dev[devnum].rxbuf_total = 0;
+		dev[devnum].rxbuf_processed = 0;
+		dev[devnum].rxbuf_processed_ts = 0;
+		dev[devnum].rxbuf_conv_state = 0;
+		dev[devnum].rxbuf_len_iq_symbol = rx_stream_count * xtrx_wire_format_get_iq_size(params->rx.wfmt);
+		dev[devnum].rxbuf_len_iq_host_sym = rx_stream_count * xtrx_host_format_get_iq_size(params->rx.hfmt);
+		dev[devnum].rx_chans_in_stream = rx_stream_count;
+		dev[devnum].rx_run = true;
+		dev[devnum].rx_hostfmt = params->rx.hfmt;
+		dev[devnum].rx_busfmt = params->rx.wfmt;
+		dev[devnum].rx_fefmt = rx_fe_fmt;
 	}
 
-	if (params->dir & XTRX_TX) {
-		if (!dev->txinit) {
-			res = xtrxll_dma_tx_init(dev->lldev, chan, DEF_TX_BUFSIZE);
+	if (params->dir & XTRX_TX) for (unsigned devnum = 0; devnum < dev->dev_max; devnum++) {
+		if (!dev[devnum].txinit) {
+			res = xtrxll_dma_tx_init(dev[devnum].lldev, chan, DEF_TX_BUFSIZE);
 			if (res) {
 				goto failed_tx_init;
 			}
-			dev->txinit = 1;
+			dev[devnum].txinit = 1;
 		}
 
 		if (params->tx_repeat_buf) {
@@ -646,7 +793,7 @@ int xtrx_run_ex(struct xtrx_dev* dev, const xtrx_run_params_t* params)
 			}
 			unsigned ssz = (tx_mode == XTRXLL_FE_MODE_MIMO) ? params->tx.paketsize * 2 :
 															  params->tx.paketsize;
-			res = xtrxll_repeat_tx_buf(dev->lldev,
+			res = xtrxll_repeat_tx_buf(dev[devnum].lldev,
 									   chan,
 									   tx_fe_fmt,
 									   params->tx_repeat_buf,
@@ -657,26 +804,26 @@ int xtrx_run_ex(struct xtrx_dev* dev, const xtrx_run_params_t* params)
 			}
 		}
 
-		dev->tx_pkt_samples = params->tx.paketsize << dev->tx_host_inter;
-		if (dev->tx_pkt_samples == 0) {
-			//dev->tx_pkt_samples = (MAX_TX_MSPS / tx_stream_count) >> dev->tx_host_inter;
-			dev->tx_pkt_samples = (MAX_TX_MSPS / tx_stream_count);
+		dev[devnum].tx_pkt_samples = params->tx.paketsize << dev[devnum].tx_host_inter;
+		if (dev[devnum].tx_pkt_samples == 0) {
+			//dev[devnum].tx_pkt_samples = (MAX_TX_MSPS / tx_stream_count) >> dev[devnum].tx_host_inter;
+			dev[devnum].tx_pkt_samples = (MAX_TX_MSPS / tx_stream_count);
 
-		} else if (((dev->tx_pkt_samples * tx_stream_count)) > MAX_TX_MSPS ) {
+		} else if (((dev[devnum].tx_pkt_samples * tx_stream_count)) > MAX_TX_MSPS ) {
 			XTRXLL_LOG(XTRXLL_WARNING, "hardware TX burst size is too high: PKT:%d, lowering to %d\n",
-					   dev->tx_pkt_samples, MAX_TX_MSPS / tx_stream_count);
+					   dev[devnum].tx_pkt_samples, MAX_TX_MSPS / tx_stream_count);
 			//res = -EINVAL;
 			//goto failed_tx_init;
 
-			dev->tx_pkt_samples = (MAX_TX_MSPS / tx_stream_count);
+			dev[devnum].tx_pkt_samples = (MAX_TX_MSPS / tx_stream_count);
 		}
 
-		dev->tx_scale_16 = 32767;
+		dev[devnum].tx_scale_16 = 32767;
 		if (params->tx.flags & XTRX_RSP_SCALE) {
-			dev->tx_scale_16 /= params->tx.scale;
+			dev[devnum].tx_scale_16 /= params->tx.scale;
 		}
 
-		if (dev->tx_host_inter) {
+		if (dev[devnum].tx_host_inter) {
 			unsigned i;
 
 			if (params->tx_repeat_buf) {
@@ -684,7 +831,7 @@ int xtrx_run_ex(struct xtrx_dev* dev, const xtrx_run_params_t* params)
 				res = -EINVAL;
 				goto failed_tx_init;
 			}
-			if (dev->tx_host_inter > 1) {
+			if (dev[devnum].tx_host_inter > 1) {
 				res = -EINVAL;
 				goto failed_tx_init;
 			}
@@ -694,18 +841,18 @@ int xtrx_run_ex(struct xtrx_dev* dev, const xtrx_run_params_t* params)
 					res |= xtrxdsp_filter_initi(g_filter_int16_taps_64_2x,
 												FILTER_TAPS_64,
 												0,
-												dev->tx_host_inter,
-												dev->tx_pkt_samples,
-												&dev->tx_host_filter[i]);
+												dev[devnum].tx_host_inter,
+												dev[devnum].tx_pkt_samples,
+												&dev[devnum].tx_host_filter[i]);
 				}
 			} else if (params->tx.hfmt == XTRX_IQ_FLOAT32) {
 				for (res = 0, i = 0; i < tx_stream_count; i++) {
 					res |= xtrxdsp_filter_init(g_filter_float_taps_64_2x,
 											   FILTER_TAPS_64,
 											   0,
-											   dev->tx_host_inter,
-											   dev->tx_pkt_samples,
-											   &dev->tx_host_filter[i]);
+											   dev[devnum].tx_host_inter,
+											   dev[devnum].tx_pkt_samples,
+											   &dev[devnum].tx_host_filter[i]);
 				}
 			} else {
 				XTRXLL_LOG(XTRXLL_ERROR, "This TX host format is usnsupported for host filtering\n");
@@ -717,78 +864,89 @@ int xtrx_run_ex(struct xtrx_dev* dev, const xtrx_run_params_t* params)
 			}
 		}
 
-		dev->txskip_time = 0;
-		dev->txburt_late_prev = 0;
-		dev->txbuf = NULL;
-		dev->txbuf_total = 0;
-		dev->txbuf_conv_state = 0;
-		dev->tx_chans_in_stream = tx_stream_count;
-		dev->txbuf_len_iq_symbol = dev->tx_chans_in_stream * xtrx_wire_format_get_iq_size(params->tx.wfmt);
-		dev->txbuf_len_iq_host_sym = dev->tx_chans_in_stream * xtrx_host_format_get_iq_size(params->tx.hfmt);
+		dev[devnum].txskip_time = 0;
+		dev[devnum].txburt_late_prev = 0;
+		dev[devnum].txbuf = NULL;
+		dev[devnum].txbuf_total = 0;
+		dev[devnum].txbuf_conv_state = 0;
+		dev[devnum].tx_chans_in_stream = tx_stream_count;
+		dev[devnum].txbuf_len_iq_symbol = dev[devnum].tx_chans_in_stream * xtrx_wire_format_get_iq_size(params->tx.wfmt);
+		dev[devnum].txbuf_len_iq_host_sym = dev[devnum].tx_chans_in_stream * xtrx_host_format_get_iq_size(params->tx.hfmt);
 
-		dev->tx_run = true;
-		dev->tx_hostfmt = params->tx.hfmt;
-		dev->tx_busfmt = params->tx.wfmt;
-		dev->tx_fefmt = tx_fe_fmt;
+		dev[devnum].tx_run = true;
+		dev[devnum].tx_hostfmt = params->tx.hfmt;
+		dev[devnum].tx_busfmt = params->tx.wfmt;
+		dev[devnum].tx_fefmt = tx_fe_fmt;
 	}
 
-	res = xtrxll_dma_start(dev->lldev,
-						   chan,
-						   rx_fe_fmt,
-						   (xtrxll_mode_t)(rx_mode | rx_mode_flags),
-						   rx_start_ts,
-						   tx_fe_fmt,
-						   tx_mode);
-	if (res) {
-		XTRXLL_LOG(XTRXLL_ERROR, "Unable to start DMA err=%d\n", res);
-		goto fail_dma_start;
+	/////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+	for (unsigned devnum = 0; devnum < dev->dev_max; devnum++) {
+		res = xtrxll_dma_start(dev[devnum].lldev,
+							   chan,
+							   rx_fe_fmt,
+							   (xtrxll_mode_t)(rx_mode | rx_mode_flags),
+							   rx_start_ts,
+							   tx_fe_fmt,
+							   tx_mode);
+		if (res) {
+			XTRXLL_LOG(XTRXLL_ERROR, "Unable to start DMA err=%d\n", res);
+			goto fail_dma_start;
+		}
 	}
 
 	return 0;
 
 fail_dma_start:
 failed_tx_init:
-	dev->rx_run = false;
-	dev->tx_run = false;
+	for (unsigned devnum = 0; devnum < dev->dev_max; devnum++) {
+		dev[devnum].rx_run = false;
+		dev[devnum].tx_run = false;
+	}
 
 filter_cleanup:
-	xtrxdsp_filter_free(&dev->rx_host_filter[0]);
-	xtrxdsp_filter_free(&dev->rx_host_filter[1]);
-	xtrxdsp_filter_free(&dev->tx_host_filter[0]);
-	xtrxdsp_filter_free(&dev->tx_host_filter[1]);
-
+	for (unsigned devnum = 0; devnum < dev->dev_max; devnum++) {
+		xtrxdsp_filter_free(&dev[devnum].rx_host_filter[0]);
+		xtrxdsp_filter_free(&dev[devnum].rx_host_filter[1]);
+		xtrxdsp_filter_free(&dev[devnum].tx_host_filter[0]);
+		xtrxdsp_filter_free(&dev[devnum].tx_host_filter[1]);
+	}
 failed_fe:
-	dev->fe->ops->dd_set_modes(dev->fe, XTRX_FEDD_RESET, &fe_params);
+	for (unsigned devnum = 0; devnum < dev->dev_max; devnum++) {
+		fe_params.rx.chs = (params->rx.chs >> (2 * devnum)) & XTRX_CH_AB;
+		fe_params.tx.chs = (params->tx.chs >> (2 * devnum)) & XTRX_CH_AB;
+
+		dev[devnum].fe->ops->dd_set_modes(dev[devnum].fe, XTRX_FEDD_RESET, &fe_params);
+	}
 	return res;
 }
 
 int xtrx_stop(struct xtrx_dev* dev, xtrx_direction_t dir)
 {
-	int res;
+	int res = 0;
 	const int chan = 0; //TODO
 
-	if (dir & XTRX_RX) {
-		res = xtrxll_dma_rx_start(dev->lldev, 0, XTRXLL_FE_STOP);
+	if (dir & XTRX_RX) for (unsigned devnum = 0; devnum < dev->dev_max; devnum++) {
+		res = xtrxll_dma_rx_start(dev[devnum].lldev, 0, XTRXLL_FE_STOP);
 
-		dev->rxbuf = NULL;
-		dev->rxbuf_total = 0;
-		dev->rxbuf_processed = 0;
-		dev->rxbuf_processed_ts = 0;
-		dev->rx_run = false;
+		dev[devnum].rxbuf = NULL;
+		dev[devnum].rxbuf_total = 0;
+		dev[devnum].rxbuf_processed = 0;
+		dev[devnum].rxbuf_processed_ts = 0;
+		dev[devnum].rx_run = false;
 
-		xtrxdsp_filter_free(&dev->rx_host_filter[0]);
-		xtrxdsp_filter_free(&dev->rx_host_filter[1]);
+		xtrxdsp_filter_free(&dev[devnum].rx_host_filter[0]);
+		xtrxdsp_filter_free(&dev[devnum].rx_host_filter[1]);
 	}
 
-	if (dir & XTRX_TX) {
-		res = xtrxll_dma_tx_start(dev->lldev, chan, XTRXLL_FE_STOP, XTRXLL_FE_MODE_MIMO);
+	if (dir & XTRX_TX) for (unsigned devnum = 0; devnum < dev->dev_max; devnum++) {
+		res = xtrxll_dma_tx_start(dev[devnum].lldev, chan, XTRXLL_FE_STOP, XTRXLL_FE_MODE_MIMO);
 
-		dev->txbuf = NULL;
-		dev->txbuf_total = 0;
-		dev->tx_run = false;
+		dev[devnum].txbuf = NULL;
+		dev[devnum].txbuf_total = 0;
+		dev[devnum].tx_run = false;
 
-		xtrxdsp_filter_free(&dev->tx_host_filter[0]);
-		xtrxdsp_filter_free(&dev->tx_host_filter[1]);
+		xtrxdsp_filter_free(&dev[devnum].tx_host_filter[0]);
+		xtrxdsp_filter_free(&dev[devnum].tx_host_filter[1]);
 	}
 
 	struct xtrx_dd_params fe_params;
@@ -799,14 +957,16 @@ int xtrx_stop(struct xtrx_dev* dev, xtrx_direction_t dir)
 	fe_params.tx.chs = XTRX_CH_AB;
 	fe_params.tx.flags = 0;
 
-	res = dev->fe->ops->dd_set_modes(dev->fe, XTRX_FEDD_RESET, &fe_params);
-	if (res)
-		return res;
+	for (unsigned devnum = 0; devnum < dev->dev_max; devnum++) {
+		res = dev[devnum].fe->ops->dd_set_modes(dev[devnum].fe, XTRX_FEDD_RESET, &fe_params);
+		//if (res)
+		//	return res;
 
-	res = xtrxll_dma_start(dev->lldev, chan,
-						   (dir & XTRX_RX) ? XTRXLL_FE_STOP : XTRXLL_FE_DONTTOUCH, XTRXLL_FE_MODE_MIMO,
-						   0,
-						   (dir & XTRX_TX) ? XTRXLL_FE_STOP : XTRXLL_FE_DONTTOUCH, XTRXLL_FE_MODE_MIMO);
+		res = xtrxll_dma_start(dev[devnum].lldev, chan,
+							   (dir & XTRX_RX) ? XTRXLL_FE_STOP : XTRXLL_FE_DONTTOUCH, XTRXLL_FE_MODE_MIMO,
+							   0,
+							   (dir & XTRX_TX) ? XTRXLL_FE_STOP : XTRXLL_FE_DONTTOUCH, XTRXLL_FE_MODE_MIMO);
+	}
 	return res;
 }
 
@@ -821,38 +981,42 @@ enum processing_type {
 	WIRE_I16_HOST_I16  = MAKE_FORMAT(XTRX_WF_16, XTRX_IQ_INT16),
 };
 
-int xtrx_send_sync_ex(struct xtrx_dev* dev, xtrx_send_ex_info_t *info)
+int xtrx_send_sync_ex(struct xtrx_dev* mdev, xtrx_send_ex_info_t *info)
 {
-	if (!dev->tx_run) {
+	if (!mdev->tx_run) {
 		XTRXLL_LOG(XTRXLL_ERROR, "xtrx_send_sync_ex: TX stream is not configured\n");
 		return -ENOSTR;
 	}
 
 	const int chan = 0;
 	/* Total numer of sample in all channels */
-	size_t total_samples = info->samples * info->buffer_count;
+	size_t total_samples = info->samples * info->buffer_count / mdev->dev_max;
 	/* Total bytes user requested */
-	size_t user_total = total_samples * dev->txbuf_len_iq_host_sym / dev->tx_chans_in_stream;
-	if (user_total == 0 || info->buffer_count > 2)
+	size_t user_total = total_samples * mdev->txbuf_len_iq_host_sym / mdev->tx_chans_in_stream;
+
+	if (user_total == 0 || (info->buffer_count != mdev->dev_max && info->buffer_count != 2 * mdev->dev_max))
 		return -EINVAL;
 
 	/* Total bytes satisfied from user */
 	size_t user_processed = 0;
-	int res;
+	int res = -EINVAL;
 
 	/* expanding from host encoding to the wire format times 2, we need this
 	   to present 12-bit wire format in integer */
-	unsigned encode_amplification_x2 = 2 * dev->txbuf_len_iq_host_sym / dev->txbuf_len_iq_symbol;
+	unsigned encode_amplification_x2 = 2 * mdev->txbuf_len_iq_host_sym / mdev->txbuf_len_iq_symbol;
+
+	bool single_ch_streaming = (info->buffer_count == mdev->dev_max);
 
 	uint16_t cur_late;//, upd_late;
-	wts_long_t cur_wts = info->ts << dev->tx_host_inter;
+	wts_long_t cur_wts = info->ts << mdev->tx_host_inter;
 
 	info->out_flags = 0;
 	info->out_samples = 0;
 
 	unsigned timeout_ms = (info->flags & XTRX_TX_TIMEOUT) ? info->timeout : ~0UL;
 
-	for (;;) {
+	for (unsigned devnum = 0; devnum < mdev->dev_max;) {
+		struct xtrx_dev* dev = &mdev[devnum];
 		void* wire_buffer_ptr;
 		size_t wire_buffer_size; /* maximum DMA buffer size in bytes */
 
@@ -880,8 +1044,8 @@ got_buffer:
 			if ((info->flags & XTRX_TX_NO_DISCARD) == 0) {
 				uint16_t upd_late = cur_late - dev->txburt_late_prev;
 				if (dev->txskip_time > cur_wts) {
-					XTRXLL_LOG(XTRXLL_ERROR, "xtrx_send_burst_sync: TX DMA Current skip due to TO buffers: %d, prev: %d TS:%" PRId64 " STPS:%" PRId64 "\n",
-							   cur_late, dev->txburt_late_prev, cur_wts, dev->txskip_time);
+					XTRXLL_LOG(XTRXLL_ERROR, "xtrx_send_burst_sync[%d]: TX DMA Current skip due to TO buffers: %d, prev: %d TS:%" PRId64 " STPS:%" PRId64 "\n",
+							   devnum, cur_late, dev->txburt_late_prev, cur_wts, dev->txskip_time);
 					dev->txburt_late_prev = cur_late;
 
 					info->out_flags |= XTRX_TX_DISCARDED_TO;
@@ -889,8 +1053,8 @@ got_buffer:
 				}
 
 				if (upd_late > 8) {
-					XTRXLL_LOG(XTRXLL_ERROR, "xtrx_send_burst_sync: TX DMA Current delayed buffers: %d, prev: %d TS:%" PRId64 "\n",
-							   cur_late, dev->txburt_late_prev, cur_wts);
+					XTRXLL_LOG(XTRXLL_ERROR, "xtrx_send_burst_sync[%d]: TX DMA Current delayed buffers: %d, prev: %d TS:%" PRId64 "\n",
+							   devnum, cur_late, dev->txburt_late_prev, cur_wts);
 					dev->txburt_late_prev = cur_late;
 					dev->txskip_time = cur_wts + 4*info->samples; // Discard  2x packets
 
@@ -906,23 +1070,24 @@ got_buffer:
 			wire_buffer_size = dev->txbuf_total - dev->txbuf_processed;
 		}
 
-		XTRXLL_LOG(XTRXLL_DEBUG, "xtrx_send_burst_sync: Total=%u Processed=%u PTS=%" PRId64
-				   " cwts=%" PRId64 " UserTotal=%u UserProcessed=%u\n",
+		XTRXLL_LOG(XTRXLL_DEBUG, "xtrx_send_burst_sync[%d]: Total=%u Processed=%u PTS=%" PRId64
+				   " cwts=%" PRId64 " UserTotal=%u UserProcessed=%u\n", devnum,
 				   dev->txbuf_total, dev->txbuf_processed, dev->txbuf_processed_ts, cur_wts,
 				   (unsigned)user_total, (unsigned)user_processed);
 
 		/* bytes need to fill from user */
 		size_t remaining = user_total - user_processed;
+		unsigned bcnt = single_ch_streaming ? 1 : 2;
 
 		// TODO Move this buffer away from stack
 #define TMP_SIZE	32768
 		static float tmp_buffer[TMP_SIZE];
 		float* tmp_buffer_p[2] = { tmp_buffer, tmp_buffer + TMP_SIZE/2 };
 
-		const void* usr_buf[2] = { (info->buffer_count == 1) ?
-								   info->buffers[0] + user_processed : info->buffers[0] + user_processed / 2,
-								   (info->buffer_count == 1) ?
-								   NULL : info->buffers[1] + user_processed / 2 };
+		const void* usr_buf[2] = { (single_ch_streaming) ?
+								   info->buffers[devnum] + user_processed : info->buffers[2*devnum + 0] + user_processed / 2,
+								   (single_ch_streaming) ?
+								   NULL : info->buffers[2*devnum + 1] + user_processed / 2 };
 		const void* enc_buf[2];
 		unsigned i;
 		/* processed data in the current cycle */
@@ -953,17 +1118,17 @@ got_buffer:
 		wire_samples_consumed = wire_bytes_consumed / dev->txbuf_len_iq_symbol;
 
 		if (info->flags & XTRX_TX_SEND_ZEROS) {
-			for (i = 0; i < info->buffer_count; i++) {
-				memset(tmp_buffer_p[i], 0, wire_bytes_consumed / info->buffer_count);
+			for (i = 0; i < bcnt; i++) {
+				memset(tmp_buffer_p[i], 0, wire_bytes_consumed / bcnt);
 			}
 		}
 
 		/* host filtration & interpolation */
 		if (dev->tx_host_filter[0].filter_taps) {
-			unsigned num_fsamp = ((2 * dev->tx_chans_in_stream * wire_samples_consumed) >> dev->tx_host_inter) / info->buffer_count;
+			unsigned num_fsamp = ((2 * dev->tx_chans_in_stream * wire_samples_consumed) >> dev->tx_host_inter) / bcnt;
 			switch (dev->tx_hostfmt) {
 			case XTRX_IQ_FLOAT32:
-				for (i = 0; i < info->buffer_count; i++) {
+				for (i = 0; i < bcnt; i++) {
 					res = xtrxdsp_filter_work(&dev->tx_host_filter[i],
 											  (const float*)usr_buf[i],
 											  (float*)enc_buf[i],
@@ -971,7 +1136,7 @@ got_buffer:
 				}
 				break;
 			case XTRX_IQ_INT16:
-				for (i = 0; i < info->buffer_count; i++) {
+				for (i = 0; i < bcnt; i++) {
 					res = xtrxdsp_filter_worki(&dev->tx_host_filter[i],
 											   (const int16_t *)usr_buf[i],
 											   (int16_t*)enc_buf[i],
@@ -986,7 +1151,7 @@ got_buffer:
 
 		switch (MAKE_FORMAT(dev->tx_busfmt, dev->tx_hostfmt)) {
 		case WIRE_I16_HOST_I16:
-			if (info->buffer_count == 1) {
+			if (single_ch_streaming) {
 				memcpy(wire_buffer_ptr,
 					   enc_buf[0],
 						wire_bytes_consumed);
@@ -998,7 +1163,7 @@ got_buffer:
 			}
 			break;
 		case WIRE_I16_HOST_F32:
-			if (info->buffer_count == 1) {
+			if (single_ch_streaming) {
 				xtrxdsp_sc32_iq16(enc_buf[0],
 						wire_buffer_ptr,
 						dev->tx_scale_16,
@@ -1019,7 +1184,9 @@ got_buffer:
 		dev->txbuf_processed += wire_bytes_consumed;
 
 		user_processed += user_cur_proceesed;
-		info->out_samples += (dev->tx_chans_in_stream * wire_samples_consumed >> dev->tx_host_inter) / info->buffer_count;
+		if (devnum == 0) {
+			info->out_samples += (dev->tx_chans_in_stream * wire_samples_consumed >> dev->tx_host_inter) / bcnt;
+		}
 
 		if (dev->txbuf_processed == dev->txbuf_total ||
 				((user_processed == user_total) && (info->flags & XTRX_TX_DONT_BUFFER))) {
@@ -1038,38 +1205,45 @@ got_buffer:
 
 		/* User request satisfied */
 		if (user_processed == user_total) {
-			return 0;
-		}
+			// Switch to next dev
+			devnum++;
+			user_processed = 0;
+			res = 0;
 
-		cur_wts += dev->txbuf_processed_ts;
+			cur_wts = info->ts << mdev->tx_host_inter;
+		} else {
+			cur_wts += dev->txbuf_processed_ts;
+		}
 	}
 
-	return -EINVAL;
+	return res;
 }
 
-int xtrx_recv_sync_ex(struct xtrx_dev* dev, xtrx_recv_ex_info_t* info)
+int xtrx_recv_sync_ex(struct xtrx_dev* mdev, xtrx_recv_ex_info_t* info)
 {
-	if (!dev->rx_run) {
+	if (!mdev->rx_run) {
 		XTRXLL_LOG(XTRXLL_ERROR, "xtrx_recv_sync_ex: RX stream is not configured\n");
 		return -ENOSTR;
 	}
 
 	const int chan = 0;
 	/* One sample in all channels in bytes */
-	size_t total_samples = info->samples * info->buffer_count;
+	const size_t total_samples = info->samples * info->buffer_count / mdev->dev_max;
 	/* Total bytes user requested */
-	size_t user_total = total_samples * dev->rxbuf_len_iq_host_sym  / dev->rx_chans_in_stream;
-	if (user_total == 0 || info->buffer_count > 2)
+	const size_t user_total = total_samples * mdev->rxbuf_len_iq_host_sym  / mdev->rx_chans_in_stream;
+	if (user_total == 0 || (info->buffer_count != mdev->dev_max && info->buffer_count != 2 * mdev->dev_max))
 		return -EINVAL;
 
 	/* Total bytes satisfied for user */
 	size_t user_processed = 0;
 
 	xtrxll_dma_rx_flags_t flags = 0;
-	int res;
+	int res = -EINVAL;
 
 	/* expanding from wire decoding to the host format times 2 */
-	unsigned decode_amplification_x2 = 2 * dev->rxbuf_len_iq_host_sym / dev->rxbuf_len_iq_symbol;
+	const unsigned decode_amplification_x2 = 2 * mdev->rxbuf_len_iq_host_sym / mdev->rxbuf_len_iq_symbol;
+
+	const bool single_ch_streaming = (info->buffer_count == mdev->dev_max);
 
 	info->out_samples = 0;
 	info->out_events = 0;
@@ -1083,7 +1257,8 @@ int xtrx_recv_sync_ex(struct xtrx_dev* dev, xtrx_recv_ex_info_t* info)
 	if (info->flags & RCVEX_TIMOUT)
 		flags |= XTRXLL_RX_REPORT_TIMEOUT;
 
-	for (;;) {
+	for (unsigned devnum = 0; devnum < mdev->dev_max;) {
+		struct xtrx_dev* dev = &mdev[devnum];
 		void* wire_buffer_ptr;
 		unsigned wire_buffer_size; /* in bytes */
 
@@ -1138,22 +1313,22 @@ got_buffer:
 		}
 
 		XTRXLL_LOG((dev->rxbuf_ts + dev->rxbuf_processed_ts != dev->rx_samples) ? XTRXLL_WARNING : XTRXLL_DEBUG,
-				   "xtrx_recv_sync: Total=%u Processed=%u UserTotal=%u UserProcessed=%u BUFTS=%" PRIu64 "+%" PRIu64 " OURTS=%" PRIu64 "\n",
-				   dev->rxbuf_total, dev->rxbuf_processed, (unsigned)user_total, (unsigned)user_processed,
+				   "xtrx_recv_sync[%d]: Total=%u Processed=%u UserTotal=%u UserProcessed=%u BUFTS=%" PRIu64 "+%" PRIu64 " OURTS=%" PRIu64 "\n",
+				   devnum, dev->rxbuf_total, dev->rxbuf_processed, (unsigned)user_total, (unsigned)user_processed,
 				   dev->rxbuf_ts, dev->rxbuf_processed_ts, dev->rx_samples);
 
 		/* bytes need to fill in user */
 		size_t remaining = user_total - user_processed;
-
+		unsigned bcnt = single_ch_streaming ? 1 : 2;
 		// TODO Move this buffer away from stack
 #define TMP_SIZE	32768
 		static float tmp_buffer[TMP_SIZE];
 		float* tmp_buffer_p[2] = { tmp_buffer, tmp_buffer + TMP_SIZE/2 };
 
-		void* usr_buf[2] = { (info->buffer_count == 1) ?
-							 info->buffers[0] + user_processed : info->buffers[0] + user_processed / 2,
-							 (info->buffer_count == 1) ?
-							 NULL : info->buffers[1] + user_processed / 2 };
+		void* usr_buf[2] = { (single_ch_streaming) ?
+							 info->buffers[devnum] + user_processed : info->buffers[2*devnum + 0] + user_processed / 2,
+							 (single_ch_streaming) ?
+							 NULL : info->buffers[2*devnum + 1] + user_processed / 2 };
 		void* dst_buf[2];
 		unsigned i;
 		/* processed data in the current cycle */
@@ -1205,8 +1380,8 @@ got_buffer:
 
 
 		if (dev->rxbuf_ts + dev->rxbuf_processed_ts > dev->rx_samples) {
-			for (i = 0; i < info->buffer_count; i++) {
-				memset(dst_buf[i], 0, user_cur_proceesed / info->buffer_count);
+			for (i = 0; i < bcnt; i++) {
+				memset(dst_buf[i], 0, user_cur_proceesed / bcnt);
 			}
 			info->out_events |= RCVEX_EVENT_FILLED_ZERO;
 		} else {
@@ -1214,7 +1389,7 @@ got_buffer:
 			switch (datafmt) {
 			case WIRE_I8_HOST_I8:
 			case WIRE_I16_HOST_I16:
-				if (info->buffer_count == 1) {
+				if (single_ch_streaming) {
 					memcpy(dst_buf[0],
 							wire_buffer_ptr,
 							wire_bytes_consumed);
@@ -1231,7 +1406,7 @@ got_buffer:
 				}
 				break;
 			case WIRE_I8_HOST_I16:
-				if (info->buffer_count == 1) {
+				if (single_ch_streaming) {
 					xtrxdsp_iq8_ic16(wire_buffer_ptr,
 									 dst_buf[0],
 							wire_bytes_consumed);
@@ -1243,7 +1418,7 @@ got_buffer:
 				}
 				break;
 			case WIRE_I8_HOST_F32:
-				if (info->buffer_count == 1) {
+				if (single_ch_streaming) {
 					xtrxdsp_iq8_sc32(wire_buffer_ptr,
 									 dst_buf[0],
 							wire_bytes_consumed);
@@ -1255,7 +1430,7 @@ got_buffer:
 				}
 				break;
 			case WIRE_I16_HOST_F32:
-				if (info->buffer_count == 1) {
+				if (single_ch_streaming) {
 					xtrxdsp_iq16_sc32(wire_buffer_ptr,
 									  dst_buf[0],
 							dev->rx_scale_16,
@@ -1285,14 +1460,15 @@ got_buffer:
 		}
 
 		dev->rx_samples += wire_samples_consumed;
-		info->out_samples += (dev->rx_chans_in_stream * wire_samples_consumed >> dev->rx_host_decim) / info->buffer_count;
-
+		if (devnum == 0) {
+			info->out_samples += (dev->rx_chans_in_stream * wire_samples_consumed >> dev->rx_host_decim) / bcnt;
+		}
 
 		if (dev->rx_host_filter[0].filter_taps) {
-			unsigned num_fsamp = 2 * dev->rx_chans_in_stream * wire_samples_consumed / info->buffer_count;
+			unsigned num_fsamp = 2 * dev->rx_chans_in_stream * wire_samples_consumed / bcnt;
 			switch (dev->rx_hostfmt) {
 			case XTRX_IQ_FLOAT32:
-				for (i = 0; i < info->buffer_count; i++) {
+				for (i = 0; i < bcnt; i++) {
 					res = xtrxdsp_filter_work(&dev->rx_host_filter[i],
 											  (const float*)dst_buf[i],
 											  (float*)usr_buf[i],
@@ -1300,7 +1476,7 @@ got_buffer:
 				}
 				break;
 			case XTRX_IQ_INT16:
-				for (i = 0; i < info->buffer_count; i++) {
+				for (i = 0; i < bcnt; i++) {
 					res = xtrxdsp_filter_worki(&dev->rx_host_filter[i],
 											   (const int16_t *)dst_buf[i],
 											   (int16_t*)usr_buf[i],
@@ -1316,11 +1492,14 @@ got_buffer:
 
 		/* User request satisfied */
 		if (user_processed == user_total) {
-			return 0;
+			// Switch to next dev
+			user_processed = 0;
+			devnum++;
+			res = 0;
 		}
 	}
 
-	return -EINVAL;
+	return res;
 }
 
 void xtrx_set_logfunction(xtrx_logfunc_t func)
@@ -1329,7 +1508,7 @@ void xtrx_set_logfunction(xtrx_logfunc_t func)
 }
 
 
-int xtrx_val_set(struct xtrx_dev* dev, xtrx_direction_t dir,
+static int _xtrx_val_set_int(struct xtrx_dev* dev, xtrx_direction_t dir,
 				 xtrx_channel_t chan, xtrx_val_t type, uint64_t val)
 {
 	if (type >= XTRX_RFIC_REG_0 && type <= XTRX_RFIC_REG_0 + 65535)	{
@@ -1361,7 +1540,23 @@ int xtrx_val_set(struct xtrx_dev* dev, xtrx_direction_t dir,
 	}
 }
 
-XTRX_API int xtrx_val_get(struct xtrx_dev* dev, xtrx_direction_t dir,
+XTRX_API int xtrx_val_set(struct xtrx_dev* dev, xtrx_direction_t dir,
+				 xtrx_channel_t chan, xtrx_val_t type, uint64_t val)
+{
+	int res = -EINVAL;
+	for (unsigned devnum = 0; devnum < dev->dev_max; devnum++) {
+		unsigned fe_ch = (chan >> 2 * devnum) & XTRX_CH_AB;
+		if (fe_ch) {
+			res = _xtrx_val_set_int(dev, dir, fe_ch, type, val);
+			if (res) {
+				break;
+			}
+		}
+	}
+	return res;
+}
+
+static int _xtrx_val_get_int(struct xtrx_dev* dev, xtrx_direction_t dir,
 						  xtrx_channel_t chan, xtrx_val_t type, uint64_t* oval)
 {
 	int res, val;
@@ -1411,4 +1606,20 @@ XTRX_API int xtrx_val_get(struct xtrx_dev* dev, xtrx_direction_t dir,
 	default:
 		return -EINVAL;
 	}
+}
+
+XTRX_API int xtrx_val_get(struct xtrx_dev* dev, xtrx_direction_t dir,
+						  xtrx_channel_t chan, xtrx_val_t type, uint64_t* oval)
+{
+	int res = -EINVAL;
+	for (unsigned devnum = 0; devnum < dev->dev_max; devnum++) {
+		unsigned fe_ch = (chan >> 2 * devnum) & XTRX_CH_AB;
+		if (fe_ch) {
+			res = _xtrx_val_get_int(dev, dir, fe_ch, type, oval);
+			if (res) {
+				break;
+			}
+		}
+	}
+	return res;
 }

@@ -221,8 +221,8 @@ int xtrx_debug_init(const char *params,
 	int fd = mkfifo(fifoname, 0666);
 	if (fd < 0 && errno != EEXIST) {
 		int err = -errno;
-		XTRXLL_LOG(XTRXLL_ERROR, "xtrx_debug: Unable to create FIFO, error %d\n",
-				   err);
+		XTRXLL_LOG(XTRXLL_ERROR, "xtrx_debug: Unable to create FIFO file `%s`, error %d\n",
+				   fifoname, err);
 		return err;
 	}
 
