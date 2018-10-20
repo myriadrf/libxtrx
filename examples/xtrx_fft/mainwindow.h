@@ -57,6 +57,7 @@ public:
 	void wf_add_point(int x, unsigned data);
 	void wf_feed_line();
 
+	void update_devs();
 public slots:
 	void redraw(int);
 	void on_btStartStop_clicked();

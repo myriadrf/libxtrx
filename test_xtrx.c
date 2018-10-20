@@ -470,7 +470,9 @@ int main(int argc, char** argv)
 
 	if (dmarx == 0 && dmatx == 0 && tx_repeat_mode == 0) {
 		fprintf(stderr, "Usage: DMATX and/or DMARX must be enabled (or TX REPEAT is set)!\n");
-		exit(EXIT_FAILURE);
+		//exit(EXIT_FAILURE);
+		multidev = 1;
+		device = NULL;
 	}
 	if (loopback) {
 		txsamplerate = rxsamplerate;
@@ -505,7 +507,7 @@ int main(int argc, char** argv)
 				return -1;
 			}
 			for (int i = 0; i < cnt; i++) {
-				printf("[%02d] %-16s %-16s %-16s %-16s\n", i,
+				printf("[%02d] %-32s %-16s %-16s %-16s\n", i,
 					   di[i].uniqname, di[i].devid, di[i].proto, di[i].speed);
 			}
 

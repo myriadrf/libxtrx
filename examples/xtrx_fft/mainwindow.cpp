@@ -71,6 +71,23 @@ MainWindow::MainWindow(QWidget *parent) :
 	rx_thread = new RxThread(this);
 
 	connect(rx_thread, SIGNAL(newRxData(int)), this, SLOT(redraw(int)));
+
+	update_devs();
+}
+
+void MainWindow::update_devs()
+{
+	ui->cbDev->clear();
+
+	const unsigned MAX_DEVS = 32;
+	xtrx_device_info_t devs[MAX_DEVS];
+	int res = xtrx_discovery(devs, MAX_DEVS);
+	if (res <= 0)
+		return;
+
+	for (int i = 0; i < res; i++) {
+		ui->cbDev->addItem(QString::fromLatin1(devs[i].uniqname));
+	}
 }
 
 void MainWindow::redraw(int idx)
@@ -121,14 +138,14 @@ void MainWindow::on_btStartStop_clicked()
 	int res;
 	double samplerate = ui->smaplerate->value() * 1e6;
 	double gain = ui->gain->value();
-	const char* name = "/dev/xtrx0";
+	QString devstr = ui->cbDev->currentText();
 
 	if (dev == NULL) {
 		ui->widget->graph(0)->clearData();
 		ui->widget->graph(1)->clearData();
 
 		ui->statusbar->showMessage(QString("Samplerate %1 MSPS Gain: %2").arg(samplerate).arg(gain));
-		res = xtrx_open(name, 4, &dev);
+		res = xtrx_open(devstr.toLatin1(), 4, &dev);
 		if (res)
 			goto failed;
 
@@ -167,7 +184,7 @@ void MainWindow::on_btStartStop_clicked()
 			params.rx.flags = 0;
 			params.rx.hfmt = XTRX_IQ_INT8;
 			params.rx.wfmt = XTRX_WF_8;
-			params.rx.paketsize = 32768;
+			params.rx.paketsize = 0;
 			params.rx.flags = XTRX_RSP_SISO_MODE | XTRX_STREAMDSP_2;
 		}
 		res = xtrx_run_ex(dev, &params);
@@ -204,7 +221,9 @@ failed_freq:
 	xtrx_close(dev);
 	dev = NULL;
 failed:
-	ui->statusbar->showMessage(QString("Failed to open %1 (%2) errno %3").arg(name).arg(strerror(-res)).arg(res));
+	ui->statusbar->showMessage(QString("Failed to open %1 (%2) errno %3").arg(devstr).arg(strerror(-res)).arg(res));
+
+	update_devs();
 }
 
 void MainWindow::on_max_clicked()

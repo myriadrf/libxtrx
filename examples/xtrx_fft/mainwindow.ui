@@ -6,7 +6,7 @@
    <rect>
     <x>0</x>
     <y>0</y>
-    <width>1484</width>
+    <width>1792</width>
     <height>600</height>
    </rect>
   </property>
@@ -30,6 +30,9 @@
        <enum>QFrame::Raised</enum>
       </property>
       <layout class="QHBoxLayout" name="horizontalLayout">
+       <item>
+        <widget class="QComboBox" name="cbDev"/>
+       </item>
        <item>
         <widget class="QPushButton" name="btStartStop">
          <property name="text">
@@ -255,8 +258,8 @@
     <rect>
      <x>0</x>
      <y>0</y>
-     <width>1484</width>
-     <height>25</height>
+     <width>1792</width>
+     <height>34</height>
     </rect>
    </property>
   </widget>
