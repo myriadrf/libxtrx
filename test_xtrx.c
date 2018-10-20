@@ -259,7 +259,7 @@ int main(int argc, char** argv)
 	//uint32_t i;
 	int opt;
 	uint64_t st, tm;
-	const char* device = "/dev/xtrx0";
+	const char* device = NULL;
 
 	pthread_t sendthread;
 	int multidev = 0;
@@ -515,17 +515,20 @@ int main(int argc, char** argv)
 		}
 
 		unsigned j;
+		char cpstr[1024];
+		strncpy(cpstr, device, sizeof(cpstr));
+
 		char* str1;
 		char* saveptr1;
 		char* devices[MAX_DEVS];
-		for (j = 0, str1 = device; j < MAX_DEVS; j++, str1 = NULL) {
+		for (j = 0, str1 = cpstr; j < MAX_DEVS; j++, str1 = NULL) {
 			char* token = strtok_r(str1, ";", &saveptr1);
 			if (token == NULL)
 				break;
 			devices[j] = token;
 		}
 		fprintf(stderr, "Creating multidev for %d devices\n", j);
-		res = xtrx_open_multi(j, devices, loglevel, &dev);
+		res = xtrx_open_multi(j, (const char**)devices, loglevel, &dev);
 		dev_count = j;
 	} else {
 		res = xtrx_open(device, loglevel, &dev);
@@ -733,8 +736,7 @@ int main(int argc, char** argv)
 				sp = grtime();
 				uint64_t sb = sp - sa;
 
-				abpkt += 1e9 * ri.samples * ri.buffer_count / dev_count / actual_rxsample_rate  / (rx_siso ? 1 : 2);
-
+				abpkt += 1e9 * ri.samples * ri.buffer_count / dev_count / actual_rxsample_rate;
 				uint64_t dt = 0;
 				if (1) {
 					dt = deserialize_b12((const uint16_t*)((char*)data + 0x80));
@@ -830,7 +832,7 @@ falied_stop_rx:
 				if (tx_nodiscard)
 					nfo.flags |= XTRX_TX_NO_DISCARD;
 				nfo.ts = tx_start_ts + tx_sent_samples;
-				nfo.buffers = stream_buffers;
+				nfo.buffers = (const void* const*)stream_buffers;
 				nfo.buffer_count = buf_cnt;
 				nfo.timeout = 0;
 
@@ -840,7 +842,7 @@ falied_stop_rx:
 				sp = grtime();
 				uint64_t sb = sp - sa;
 
-				abpkt += 1e9 * nfo.samples * nfo.buffer_count / dev_count / actual_txsample_rate / (tx_siso ? 1 : 2);
+				abpkt += 1e9 * nfo.samples * nfo.buffer_count / dev_count / actual_txsample_rate;
 
 				if (logp == 0 || p % s_logp == 0)
 					fprintf(stderr, "PROCESSED TX SLICE %" PRIu64 "/%" PRIu64 ": res %d TS:%8" PRIu64 " %c%c  %6" PRId64 " us DELTA %6" PRId64 " us LATE %6" PRId64 " us  %d samples\n",
@@ -854,7 +856,7 @@ falied_stop_rx:
 				}
 
 				//tx_sent_samples += nfo.out_samples * nfo.buffer_count / (tx_siso ? 1 : 2);
-				tx_sent_samples += nfo.samples * (nfo.buffer_count / dev_count) / (tx_siso ? 1 : 2);
+				tx_sent_samples += nfo.samples * (nfo.buffer_count / dev_count);// / (tx_siso ? 1 : 2);
 				if (nfo.out_flags) {
 					underruns ++;
 				}
