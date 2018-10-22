@@ -99,7 +99,7 @@ void init_buf()
 #define BUF testbuf2
 static volatile int s_stopflag = 0;
 static uint32_t s_tx_slice = 8192;
-static uint32_t s_tx_skip = 0;
+static uint32_t s_tx_skip = 8192;
 static uint32_t s_tx_pause = 0;
 static int s_tx_siso = 0;
 static double s_actual_txsample_rate;
@@ -258,7 +258,7 @@ int main(int argc, char** argv)
 	//uint32_t result;
 	//uint32_t i;
 	int opt;
-	uint64_t st, tm;
+	uint64_t st, tm = 0;
 	const char* device = NULL;
 
 	pthread_t sendthread;
@@ -275,7 +275,7 @@ int main(int argc, char** argv)
 	xtrx_host_format_t rx_host_fmt = XTRX_IQ_INT16;
 	xtrx_wire_format_t tx_wire_fmt = XTRX_WF_16;
 	xtrx_host_format_t tx_host_fmt = XTRX_IQ_INT16;
-	uint64_t samples = 524288;
+	uint64_t samples = 16384;
 	unsigned rx_slice = samples;
 	int outstream;
 	//int outstreamb;
@@ -494,6 +494,7 @@ int main(int argc, char** argv)
 		txsamplerate = 0;
 	}
 
+	char* data = NULL;
 	unsigned dev_count;
 	int res;
 	if (multidev) {
@@ -540,16 +541,7 @@ int main(int argc, char** argv)
 	}
 
 	char* data_bufs[MAX_DEVS];
-	char* data;
-#if 0
-	char* datab = NULL;
-	data = (char*)malloc(rx_sample_host_size * samples); // IQ * float * samples
-	memset(data, 0, rx_sample_host_size * samples);
 
-	if (mimomode) {
-		datab = (data + rx_sample_host_size * samples / 2);
-	}
-#else
 	data = (char*)malloc(rx_sample_host_size * samples * dev_count);
 	unsigned chunck_size = (rx_sample_host_size * samples);
 	if (mimomode)
@@ -558,7 +550,6 @@ int main(int argc, char** argv)
 	for (unsigned dc = 0; dc < ((mimomode) ? dev_count * 2 : dev_count); dc++) {
 		 data_bufs[dc] = data + dc * chunck_size;
 	}
-#endif
 
 	if (refclk || extclk) {
 		xtrx_set_ref_clk(dev, refclk, (extclk) ? XTRX_CLKSRC_EXT : XTRX_CLKSRC_INT);
@@ -717,14 +708,11 @@ int main(int argc, char** argv)
 				size_t rem = samples - h * rx_slice;
 				if (rem > rx_slice)
 					rem = rx_slice;
-#if 0
-				void* buffers[2] = {(datab) ? ((char*)data) + h * rx_slice * rx_sample_host_size / 2 :   ((char*)data) + h * rx_slice * rx_sample_host_size,
-									(datab) ? ((char*)datab) + h * rx_slice * rx_sample_host_size / 2 : NULL };
-#else
+
 				for (unsigned bc = 0; bc < buf_cnt; bc++) {
 					stream_buffers[bc] = data_bufs[bc] + slize_off;
 				}
-#endif
+
 				ri.samples = rem / ((mimomode) ? 2 : 1);
 				ri.buffer_count = buf_cnt;
 				ri.buffers = stream_buffers;
@@ -736,7 +724,7 @@ int main(int argc, char** argv)
 				sp = grtime();
 				uint64_t sb = sp - sa;
 
-				abpkt += 1e9 * ri.samples * ri.buffer_count / dev_count / actual_rxsample_rate;
+				abpkt += 1e9 * ri.samples * ri.buffer_count / dev_count / actual_rxsample_rate / (rx_siso ? 1 : 2);
 				uint64_t dt = 0;
 				if (1) {
 					dt = deserialize_b12((const uint16_t*)((char*)data + 0x80));
@@ -809,10 +797,9 @@ falied_stop_rx:
 			stream_buffers[p] = (void*)&buf[0];
 		}
 
-		//unsigned txchs = (tx_siso ? 1 : 2);
 		uint64_t underruns = 0;
 		uint64_t tx_start_ts = s_tx_skip / (tx_siso ? 1 : 2);
-		uint64_t tx_sent_samples = 0;
+		uint64_t tx_sent_samples = 0; //samples in one HW stream
 
 		uint64_t sp = grtime();
 		uint64_t abpkt = sp;
@@ -826,7 +813,6 @@ falied_stop_rx:
 					rem = s_tx_slice;
 
 				xtrx_send_ex_info_t nfo;
-				//const void *buffers[2] = { (void*)&buf[0], (void*)&buf[0] };
 				nfo.samples = rem / ((mimomode) ? 2 : 1);
 				nfo.flags = XTRX_TX_DONT_BUFFER;
 				if (tx_nodiscard)
@@ -842,21 +828,20 @@ falied_stop_rx:
 				sp = grtime();
 				uint64_t sb = sp - sa;
 
-				abpkt += 1e9 * nfo.samples * nfo.buffer_count / dev_count / actual_txsample_rate;
+				abpkt += 1e9 * nfo.samples * nfo.buffer_count / dev_count / actual_txsample_rate / (tx_siso ? 1 : 2);
 
 				if (logp == 0 || p % s_logp == 0)
-					fprintf(stderr, "PROCESSED TX SLICE %" PRIu64 "/%" PRIu64 ": res %d TS:%8" PRIu64 " %c%c  %6" PRId64 " us DELTA %6" PRId64 " us LATE %6" PRId64 " us  %d samples\n",
+					fprintf(stderr, "PROCESSED TX SLICE %" PRIu64 "/%" PRIu64 ": res %d TS:%8" PRIu64 " %c%c  %6" PRId64 " us DELTA %6" PRId64 " us LATE %6" PRId64 " us  %d x %d samples\n",
 							p, h, res, nfo.out_txlatets,
 							(nfo.out_flags & XTRX_TX_DISCARDED_TO)    ? 'D' : ' ',
 							' ',
-							sb / 1000, da / 1000, (int64_t)(sp - abpkt) / 1000, nfo.out_samples * nfo.buffer_count);
+							sb / 1000, da / 1000, (int64_t)(sp - abpkt) / 1000, nfo.out_samples, nfo.buffer_count);
 				if (res) {
 					fprintf(stderr, "Failed xtrx_send_sync_ex: %d\n", res);
 					goto falied_stop_tx;
 				}
 
-				//tx_sent_samples += nfo.out_samples * nfo.buffer_count / (tx_siso ? 1 : 2);
-				tx_sent_samples += nfo.samples * (nfo.buffer_count / dev_count);// / (tx_siso ? 1 : 2);
+				tx_sent_samples += nfo.samples * (nfo.buffer_count / dev_count) / (tx_siso ? 1 : 2);
 				if (nfo.out_flags) {
 					underruns ++;
 				}
@@ -889,7 +874,8 @@ falied_stop_tx:
 	double tx_t = (dmatx) ? s_tx_cycles*(double)s_tx_slice*1000/s_tx_tm : 0;
 	double tx_w = (dmatx) ? s_tx_cycles*(double)s_tx_slice*(double)(tx_wire_fmt+1)*1000/s_tx_tm : 0;
 
-	fprintf(stderr, "Processed RX %d x %.3f = %.3f MSPS (WIRE: %f)    TX %d x %.3f = %.3f MSPS (WIRE: %f MB/s) \n",
+	fprintf(stderr, "Processed %d devs, each: RX %d x %.3f = %.3f MSPS (WIRE: %f)    TX %d x %.3f = %.3f MSPS (WIRE: %f MB/s) \n",
+			dev_count,
 			rxchs, rx_t / rxchs, rx_t, rx_w,
 			txchs, tx_t / txchs, tx_t, tx_w);
 
@@ -910,7 +896,7 @@ falied_stop_tx:
 falied_tune:
 falied_samplerate:
 	xtrx_close(dev);
-falied_open:
 	free(data);
+falied_open:
 	return res;
 }

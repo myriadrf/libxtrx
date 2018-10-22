@@ -589,7 +589,7 @@ static unsigned xtrx_host_format_get_iq_size(xtrx_host_format_t fmt)
 
 static bool xtrx_run_params_stream_is_mimo(const xtrx_run_stream_params_t* stream)
 {
-	return (stream->chs == XTRX_CH_AB &&
+	return ((stream->chs & XTRX_CH_AB) == XTRX_CH_AB &&
 			!(stream->flags & XTRX_RSP_SISO_MODE));
 }
 
