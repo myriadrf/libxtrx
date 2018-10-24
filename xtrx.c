@@ -73,6 +73,7 @@ struct xtrx_dev {
 	clock_val_t         refclock;
 	xtrx_clock_source_t clock_source;
 
+	bool                refclock_checked;
 	char                rxinit;
 	xtrx_host_format_t  rx_hostfmt;
 	xtrx_wire_format_t  rx_busfmt;
@@ -223,6 +224,7 @@ int xtrx_open(const char* device, unsigned flags, struct xtrx_dev** outdev)
 	dev->dev_max = 1;
 	dev->lldev = lldev;
 	dev->refclock = 0;
+	dev->refclock_checked = false;
 	dev->clock_source = XTRX_CLKSRC_INT;
 
 	xtrxdsp_init();
@@ -336,12 +338,17 @@ void xtrx_close(struct xtrx_dev* dev)
 	free(dev);
 }
 
+
 void xtrx_set_ref_clk(struct xtrx_dev* dev, unsigned refclkhz, xtrx_clock_source_t clksrc)
 {
 	for (unsigned devnum = 0; devnum < dev->dev_max; devnum++) {
 		dev[devnum].clock_source = clksrc;
 		dev[devnum].refclock = refclkhz;
+		dev[devnum].refclock_checked = false;
 	}
+
+	XTRXLL_LOG(XTRXLL_INFO, "Set RefClk to %d Hz %s\n",
+			   refclkhz, (clksrc == XTRX_CLKSRC_INT) ? "internal" : "extarnal");
 }
 
 
@@ -367,27 +374,33 @@ int xtrx_set_samplerate(struct xtrx_dev* dev,
 		return res;
 	}
 
-	if (dev->refclock < 1) {
+	if ((dev->refclock < 1) || (dev->refclock_checked == false)) {
 		// Determine refclk
 		int osc;
 		unsigned i;
-		static const int base_refclk[] = { 10000000, 19200000, 26000000, 30720000, 38400000, 40000000 };
+		static const int base_refclk_ch[] = { 10000000, 19200000, 26000000, 30720000, 38400000, 40000000 };
+		static const int base_refclk_ch_cnt = (int)(sizeof(base_refclk_ch) / sizeof(base_refclk_ch[0]));
+		int lrefclk = dev->refclock;
+		const int* base_refclk = (dev->refclock > 0) ? &lrefclk : base_refclk_ch;
+		int base_refclk_cnt = (dev->refclock > 0) ? 1 : base_refclk_ch_cnt;
+
 		res = xtrxll_get_sensor(dev->lldev, XTRXLL_REFCLK_CLK, &osc);
 		if (res) {
 			return res;
 		}
 
-		for (i = 0; i < sizeof(base_refclk) / sizeof(base_refclk[0]); i++) {
+		for (i = 0; i < base_refclk_cnt; i++) {
 			int diff = base_refclk[i] - osc;
 			if (abs(diff) * (int64_t)100 / base_refclk[i] < 1) {
 				dev->refclock = base_refclk[i];
+				dev->refclock_checked = true;
 				XTRXLL_LOG(XTRXLL_INFO, "xtrx_set_samplerate: set RefClk to %d based on %d measurement\n",
 						   (int)dev->refclock, osc);
 				break;
 			}
 		}
 
-		if (dev->refclock < 1) {
+		if (!dev->refclock_checked) {
 			XTRXLL_LOG(XTRXLL_INFO, "xtrx_set_samplerate: wierd RefClk %d! set RefClk manually\n", osc);
 			return -ENOENT;
 		}
@@ -421,6 +434,7 @@ int xtrx_set_samplerate(struct xtrx_dev* dev,
 			return -EIO;
 		}
 		dev[devnum].refclock = dev->refclock;
+		dev[devnum].refclock_checked = dev->refclock_checked;
 	}
 
 	struct xtrx_fe_samplerate inrates, outrates;
