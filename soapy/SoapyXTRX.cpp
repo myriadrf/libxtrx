@@ -250,7 +250,7 @@ std::vector<std::string> SoapyXTRX::listGains(const int direction, const size_t 
 void SoapyXTRX::setGain(const int direction, const size_t channel, const double value)
 {
 	std::unique_lock<std::recursive_mutex> lock(_accessMutex);
-	xtrx_channel_t chan = (channel % 2) ? XTRX_CH_B : XTRX_CH_B;
+	xtrx_channel_t chan = to_xtrx_channels(channel);
 
 	if (direction == SOAPY_SDR_RX)
 	{
@@ -601,9 +601,9 @@ SoapySDR::RangeList SoapyXTRX::getBandwidthRange(const int direction, const size
 void SoapyXTRX::setMasterClockRate(const double rate)
 {
 	std::unique_lock<std::recursive_mutex> lock(_accessMutex);
-	_ref_clk = rate;
+	//_ref_clk = rate;
 
-	xtrx_set_ref_clk(_dev, _ref_clk, _ref_source);
+	// xtrx_set_ref_clk(_dev, _ref_clk, _ref_source);
 
 	// TODO: get reference clock in case of autodetection
 }
