@@ -113,7 +113,7 @@ find_package(QCustomPlot)
 if(Qt5Widgets_FOUND AND Qt5PrintSupport_FOUND AND QCustomPlot_FOUND)
     set(LIBXTRX_FOUND TRUE "libxtrx found")
     set(LIBXTRX_LIBRARIES xtrx)
-    set(LIBXTRX_INCLUDE_DIRS ${CMAKE_CURRENT_SOURCE_DIRECTORY})
+    set(LIBXTRX_INCLUDE_DIRS ${CMAKE_CURRENT_SOURCE_DIR})
     add_subdirectory(examples/xtrx_fft)
 endif()
 
