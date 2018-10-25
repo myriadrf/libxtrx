@@ -24,5 +24,7 @@ set(mainwindow_SRCS
     main.cpp
 )
 
+include_directories(${LIBXTRX_INCLUDE_DIRS})
+
 add_executable(mainwindow ${mainwindow_SRCS})
 target_link_libraries(mainwindow Qt5::Widgets Qt5::PrintSupport ${QCustomPlot_LIBRARIES} ${LIBXTRX_LIBRARIES})
