@@ -121,6 +121,11 @@ struct xtrx_dev {
 	unsigned               rx_host_decim;   /* Decimation on HOST */
 };
 
+static const char* _devname(struct xtrx_dev* dev)
+{
+	return xtrxll_get_name(dev->lldev);
+}
+
 static int _debug_param_io(void* obj, unsigned param, uint64_t val, uint64_t* oval)
 {
 	int res;
@@ -143,7 +148,8 @@ static int _debug_param_io(void* obj, unsigned param, uint64_t val, uint64_t* ov
 
 	case DEBUG_BOARD_TEMP:
 		res = xtrxll_get_sensor(dev->lldev, 0, &tmp);
-		XTRXLL_LOG(XTRXLL_INFO, "Temp %.1f C\n", (double)tmp/256);
+		XTRXLLS_LOG("XTRX", XTRXLL_INFO, "%s: Temp %.1f C\n",
+					_devname(dev), (double)tmp/256);
 
 		*oval = (unsigned)tmp;
 		return res;
@@ -156,7 +162,7 @@ static int _debug_param_io(void* obj, unsigned param, uint64_t val, uint64_t* ov
 				return res;
 			*oval = (unsigned)tmp;
 
-			XTRXLL_LOG(XTRXLL_INFO, "DAC: %d\n", tmp);
+			XTRXLLS_LOG("XTRX", XTRXLL_INFO, "%s: DAC: %d\n", _devname(dev), tmp);
 		}
 		if (val > 0) {
 			res = xtrxll_set_param(dev->lldev, XTRXLL_PARAM_REF_DAC, val);
@@ -231,13 +237,15 @@ int xtrx_open(const char* device, unsigned flags, struct xtrx_dev** outdev)
 
 	res = xtrx_fe_init(lldev, flags, &dev->fe);
 	if (res) {
-		XTRXLL_LOG(XTRXLL_ERROR, "Failed to initialize frontend: err=%d\n", res);
+		XTRXLLS_LOG("XTRX", XTRXLL_ERROR, "%s: Failed to initialize frontend: err=%d\n",
+					_devname(dev), res);
 		goto failed_fe;
 	}
 
 	res = xtrx_debug_init(NULL, &_debug_ops, dev, &dev->debugif);
 	if (res) {
-		XTRXLL_LOG(XTRXLL_WARNING, "Failed to initialize debug service: err=%d, debug service is disabled\n", res);
+		XTRXLLS_LOG("XTRX", XTRXLL_WARNING, "%s: Failed to initialize debug service: err=%d, debug service is disabled\n",
+					_devname(dev), res);
 		dev->debugif = NULL;
 	}
 
@@ -263,7 +271,8 @@ int xtrx_open_multi(unsigned numdevs, const char** devices, unsigned flags, stru
 	xtrxll_set_loglevel(loglevel);
 
 	if (numdevs > XTRX_DEVS_MAX || numdevs == 0) {
-		XTRXLL_LOG(XTRXLL_ERROR, "Incorrect number of XTRXes in the multidevice: %d!\n", numdevs);
+		XTRXLLS_LOG("XTRX", XTRXLL_ERROR, "Incorrect number of XTRXes in the multidevice: %d!\n",
+					numdevs);
 		return -EINVAL;
 	}
 
@@ -297,8 +306,8 @@ int xtrx_open_multi(unsigned numdevs, const char** devices, unsigned flags, stru
 
 		res = xtrx_fe_init(lldev[num], flags, &dev[num].fe);
 		if (res) {
-			XTRXLL_LOG(XTRXLL_ERROR, "Failed to initialize frontend: err=%d on dev %d/%d\n",
-					   res, num, numdevs);
+			XTRXLLS_LOG("XTRX", XTRXLL_ERROR, "%s: Failed to initialize frontend: err=%d on dev %d/%d\n",
+					   _devname(dev), res, num, numdevs);
 			for (; num > 0; num--) {
 				dev[num - 1].fe->ops->fe_deinit(dev[num - 1].fe);
 			}
@@ -308,7 +317,8 @@ int xtrx_open_multi(unsigned numdevs, const char** devices, unsigned flags, stru
 
 	res = xtrx_debug_init(NULL, &_debug_ops, dev, &dev->debugif);
 	if (res) {
-		XTRXLL_LOG(XTRXLL_WARNING, "Failed to initialize debug service: err=%d\n", res);
+		XTRXLLS_LOG("XTRX", XTRXLL_WARNING, "%s: Failed to initialize debug service: err=%d\n",
+					_devname(dev), res);
 	}
 
 	*outdev = dev;
@@ -339,16 +349,90 @@ void xtrx_close(struct xtrx_dev* dev)
 }
 
 
-void xtrx_set_ref_clk(struct xtrx_dev* dev, unsigned refclkhz, xtrx_clock_source_t clksrc)
+int xtrx_set_ref_clk(struct xtrx_dev* dev, unsigned refclkhz, xtrx_clock_source_t clksrc)
 {
-	for (unsigned devnum = 0; devnum < dev->dev_max; devnum++) {
-		dev[devnum].clock_source = clksrc;
-		dev[devnum].refclock = refclkhz;
-		dev[devnum].refclock_checked = false;
+	int res;
+	static const unsigned base_refclk_ch[] = { 10000000, 19200000, 26000000, 30720000, 38400000, 40000000 };
+	static const unsigned base_refclk_ch_cnt = (unsigned)(sizeof(base_refclk_ch) / sizeof(base_refclk_ch[0]));
+
+	enum {
+		REF_MIN = 10000000,
+		REF_MAX = 52000000,
+
+		PPM_LIMIT = 10000,
+	};
+
+	if ((refclkhz < REF_MIN && refclkhz != 0) || refclkhz > REF_MAX) {
+		XTRXLLS_LOG("XTRX", XTRXLL_WARNING, "%s: RefClk %d is out of range [%d;%d]!\n",
+				   _devname(dev), refclkhz, REF_MIN, REF_MAX);
+		return -EINVAL;
 	}
 
-	XTRXLL_LOG(XTRXLL_INFO, "Set RefClk to %d Hz %s\n",
-			   refclkhz, (clksrc == XTRX_CLKSRC_INT) ? "internal" : "extarnal");
+	for (unsigned devnum = 0; devnum < dev->dev_max; devnum++) {
+		dev[devnum].clock_source = clksrc;
+
+		res = xtrxll_set_param(dev[devnum].lldev,
+							   XTRXLL_PARAM_EXT_CLK,
+							   (dev[devnum].clock_source) ? 1 : 0);
+		if (res) {
+			XTRXLLS_LOG("XTRX", XTRXLL_ERROR, "%s: Unable to set clock source\n",
+						_devname(&dev[devnum]));
+			return res;
+		}
+	}
+
+	if (dev->refclock < 1) {
+		const unsigned* base_refclk = (refclkhz > 0) ? &refclkhz : base_refclk_ch;
+		unsigned base_refclk_cnt = (refclkhz > 0) ? 1 : base_refclk_ch_cnt;
+
+		int osc;
+		res = xtrxll_get_sensor(dev->lldev, XTRXLL_REFCLK_CLK, &osc);
+		if (res) {
+			return res;
+		}
+
+		dev->refclock_checked = false;
+		for (unsigned i = 0; i < base_refclk_cnt; i++) {
+			int diff = (int)base_refclk[i] - osc;
+			if (abs(diff) * (int64_t)(1000000/PPM_LIMIT) / base_refclk[i] < 1) {
+				dev->refclock = base_refclk[i];
+				dev->refclock_checked = true;
+				XTRXLLS_LOG("XTRX", XTRXLL_INFO, "%s: Set RefClk to %d based on %d measurement\n",
+						   _devname(dev), (int)dev->refclock, osc);
+				break;
+			}
+		}
+
+		if (!dev->refclock_checked) {
+			XTRXLLS_LOG("XTRX", XTRXLL_INFO, "%s: Wierd RefClk %d! set RefClk manually\n",
+						_devname(dev), osc);
+			return -ENOENT;
+		}
+	}
+
+	for (unsigned devnum = 1; devnum < dev->dev_max; devnum++) {
+		int osc;
+		res = xtrxll_get_sensor(dev[devnum].lldev, XTRXLL_REFCLK_CLK, &osc);
+		if (res) {
+			return res;
+		}
+		if (abs((int)dev->refclock - osc) * (int64_t)(1000000/PPM_LIMIT) / dev->refclock > 1) {
+			XTRXLLS_LOG("XTRX", XTRXLL_ERROR, "%s: RefClk %d doesn't look like %d on master!\n",
+					   _devname(&dev[devnum]), osc, (int)dev->refclock);
+
+			dev->refclock = 0;
+			dev->refclock_checked = false;
+			return -EIO;
+		}
+
+		dev[devnum].refclock = dev->refclock;
+		dev[devnum].refclock_checked = dev->refclock_checked;
+	}
+
+	XTRXLLS_LOG("XTRX", XTRXLL_DEBUG, "%s: Set RefClk to %d Hz %s\n",
+				_devname(dev),
+			   (int)dev->refclock, (dev->clock_source == XTRX_CLKSRC_INT) ? "internal" : "extarnal");
+	return 0;
 }
 
 
@@ -361,80 +445,34 @@ int xtrx_set_samplerate(struct xtrx_dev* dev,
 						double* actualrx,
 						double* actualtx)
 {
-	int res = 0, hwid;
+	int res = 0;
+	if (!dev->refclock_checked) {
+		res = xtrx_set_ref_clk(dev, 0, dev->clock_source);
+		if (res)
+			return res;
+	}
+
+	int hwid;
 	res = xtrxll_get_sensor(dev->lldev, XTRXLL_HWID, &hwid);
 	if (res) {
-		XTRXLL_LOG(XTRXLL_ERROR, "xtrx_set_samplerate: unable to get HWID\n");
+		XTRXLLS_LOG("XTRX", XTRXLL_ERROR, "%s: unable to get HWID\n", _devname(dev));
 		return res;
-	}
-
-	res = xtrxll_set_param(dev->lldev, XTRXLL_PARAM_EXT_CLK, (dev->clock_source) ? 1 : 0);
-	if (res) {
-		XTRXLL_LOG(XTRXLL_ERROR, "xtrx_set_samplerate: unable to set clock source\n");
-		return res;
-	}
-
-	if ((dev->refclock < 1) || (dev->refclock_checked == false)) {
-		// Determine refclk
-		int osc;
-		unsigned i;
-		static const int base_refclk_ch[] = { 10000000, 19200000, 26000000, 30720000, 38400000, 40000000 };
-		static const int base_refclk_ch_cnt = (int)(sizeof(base_refclk_ch) / sizeof(base_refclk_ch[0]));
-		int lrefclk = dev->refclock;
-		const int* base_refclk = (dev->refclock > 0) ? &lrefclk : base_refclk_ch;
-		int base_refclk_cnt = (dev->refclock > 0) ? 1 : base_refclk_ch_cnt;
-
-		res = xtrxll_get_sensor(dev->lldev, XTRXLL_REFCLK_CLK, &osc);
-		if (res) {
-			return res;
-		}
-
-		for (i = 0; i < base_refclk_cnt; i++) {
-			int diff = base_refclk[i] - osc;
-			if (abs(diff) * (int64_t)100 / base_refclk[i] < 1) {
-				dev->refclock = base_refclk[i];
-				dev->refclock_checked = true;
-				XTRXLL_LOG(XTRXLL_INFO, "xtrx_set_samplerate: set RefClk to %d based on %d measurement\n",
-						   (int)dev->refclock, osc);
-				break;
-			}
-		}
-
-		if (!dev->refclock_checked) {
-			XTRXLL_LOG(XTRXLL_INFO, "xtrx_set_samplerate: wierd RefClk %d! set RefClk manually\n", osc);
-			return -ENOENT;
-		}
 	}
 
 	// Check that other boards have the same settings
 	for (unsigned devnum = 1; devnum < dev->dev_max; devnum++) {
-		int nhwid, osc;
+		int nhwid;
 		res = xtrxll_get_sensor(dev[devnum].lldev, XTRXLL_HWID, &nhwid);
 		if (res) {
-			XTRXLL_LOG(XTRXLL_ERROR, "xtrx_set_samplerate[%d]: unable to get HWID\n", devnum);
+			XTRXLLS_LOG("XTRX", XTRXLL_ERROR, "%s: unable to get HWID\n",
+						_devname(&dev[devnum]));
 			return res;
 		}
 		if (nhwid != hwid) {
-			XTRXLL_LOG(XTRXLL_ERROR, "xtrx_set_samplerate[%d]: board HWID: %08x != %08x on master board\n",
-					   devnum, nhwid, hwid);
+			XTRXLLS_LOG("XTRX", XTRXLL_ERROR, "%s: board HWID: %08x != %08x on master board\n",
+					   _devname(&dev[devnum]), nhwid, hwid);
 			return -EIO;
 		}
-		res = xtrxll_set_param(dev[devnum].lldev, XTRXLL_PARAM_EXT_CLK, (dev[devnum].clock_source) ? 1 : 0);
-		if (res) {
-			XTRXLL_LOG(XTRXLL_ERROR, "xtrx_set_samplerate[%d]: unable to set clock source\n", devnum);
-			return res;
-		}
-		res = xtrxll_get_sensor(dev[devnum].lldev, XTRXLL_REFCLK_CLK, &osc);
-		if (res) {
-			return res;
-		}
-		if (abs(dev->refclock - osc) * (int64_t)100 / dev->refclock > 1) {
-			XTRXLL_LOG(XTRXLL_ERROR, "xtrx_set_samplerate[%d]: RefClk %d doesn't look like %d on master!\n",
-					   devnum, osc, (int)dev->refclock);
-			return -EIO;
-		}
-		dev[devnum].refclock = dev->refclock;
-		dev[devnum].refclock_checked = dev->refclock_checked;
 	}
 
 	struct xtrx_fe_samplerate inrates, outrates;
@@ -488,6 +526,12 @@ int xtrx_tune_ex(struct xtrx_dev* dev, xtrx_tune_t type, xtrx_channel_t ch,
 	case XTRX_TUNE_RX_FDD:
 	case XTRX_TUNE_TX_FDD:
 	case XTRX_TUNE_TX_AND_RX_TDD:
+		if (!dev->refclock_checked) {
+			res = xtrx_set_ref_clk(dev, 0, dev->clock_source);
+			if (res)
+				return res;
+		}
+
 		for (unsigned devnum = 0; devnum < dev->dev_max; devnum++) {
 			unsigned fe_ch = (ch >> (2 * devnum)) & XTRX_CH_AB;
 			res = dev[devnum].fe->ops->fe_set_freq(dev[devnum].fe, fe_ch, type, freq, actualfreq);
@@ -505,9 +549,9 @@ int xtrx_tune_ex(struct xtrx_dev* dev, xtrx_tune_t type, xtrx_channel_t ch,
 				return res;
 		}
 		return 0;
-
-	default: return -EINVAL;
 	}
+
+	return -EINVAL;
 }
 
 static int xtrx_tune_bandwidth(struct xtrx_dev* dev, xtrx_channel_t xch,
@@ -662,13 +706,15 @@ int xtrx_run_ex(struct xtrx_dev* dev, const xtrx_run_params_t* params)
 				(params->rx.wfmt == XTRX_WF_16 && params->rx.hfmt == XTRX_IQ_INT8) ||
 				(params->rx.wfmt == XTRX_WF_12 && params->rx.hfmt != XTRX_IQ_FLOAT32)) {
 
-			XTRXLL_LOG(XTRXLL_ERROR, "Specified combination of host and wire formats isn't supported for RX stream\n");
+			XTRXLLS_LOG("XTRX", XTRXLL_ERROR, "%s: Specified combination of host and wire formats isn't supported for RX stream\n",
+						_devname(dev));
 			return -EINVAL;
 		}
 
 		rx_bpkt_size = calculate_pkt_size(&params->rx) << dev->rx_host_decim;
 		if (params->rx.hfmt != XTRX_IQ_FLOAT32 && (params->rx.flags & XTRX_RSP_SCALE)) {
-			XTRXLL_LOG(XTRXLL_ERROR, "XTRX_RSP_SCALE is supported only for XTRX_IQ_FLOAT32 host format in RX stream\n");
+			XTRXLLS_LOG("XTRX", XTRXLL_ERROR, "%s: XTRX_RSP_SCALE is supported only for XTRX_IQ_FLOAT32 host format in RX stream\n",
+						_devname(dev));
 			return -EINVAL;
 		}
 
@@ -686,12 +732,14 @@ int xtrx_run_ex(struct xtrx_dev* dev, const xtrx_run_params_t* params)
 
 	if (params->dir & XTRX_TX) {
 		if ((params->tx.wfmt != XTRX_WF_16 || params->tx.hfmt == XTRX_IQ_INT8)) {
-			XTRXLL_LOG(XTRXLL_ERROR, "Specified combination of host and wire formats isn't supported for TX stream\n");
+			XTRXLLS_LOG("XTRX", XTRXLL_ERROR, "%s: Specified combination of host and wire formats isn't supported for TX stream\n",
+						_devname(dev));
 			return -EINVAL;
 		}
 
 		if (params->tx.hfmt != XTRX_IQ_FLOAT32 && (params->tx.flags & XTRX_RSP_SCALE)) {
-			XTRXLL_LOG(XTRXLL_ERROR, "XTRX_RSP_SCALE is supported only for XTRX_IQ_FLOAT32 host format in TX stream\n");
+			XTRXLLS_LOG("XTRX", XTRXLL_ERROR, "%s: XTRX_RSP_SCALE is supported only for XTRX_IQ_FLOAT32 host format in TX stream\n",
+						_devname(dev));
 			return -EINVAL;
 		}
 
@@ -731,7 +779,8 @@ int xtrx_run_ex(struct xtrx_dev* dev, const xtrx_run_params_t* params)
 			if (res) {
 				goto failed_fe;
 			}
-			XTRXLL_LOG(XTRXLL_INFO, "RX ititialized to %d bytes paket size\n", rx_bpkt_size);
+			XTRXLLS_LOG("XTRX", XTRXLL_INFO, "%s: RX ititialized to %d bytes paket size\n",
+						_devname(dev), rx_bpkt_size);
 			dev[devnum].rxinit = 1;
 		}
 
@@ -761,13 +810,15 @@ int xtrx_run_ex(struct xtrx_dev* dev, const xtrx_run_params_t* params)
 												&dev[devnum].rx_host_filter[i]);
 				}
 			} else {
-				XTRXLL_LOG(XTRXLL_ERROR, "This RX host format is usnsupported for host filtering\n");
+				XTRXLLS_LOG("XTRX", XTRXLL_ERROR, "%s: This RX host format is usnsupported for host filtering\n",
+							_devname(dev));
 				res = -EINVAL;
 				goto failed_fe;
 			}
 
 			if (res) {
-				XTRXLL_LOG(XTRXLL_ERROR, "Unable to initialize host decimation/filtering err=%d\n", res);
+				XTRXLLS_LOG("XTRX", XTRXLL_ERROR, "%s: Unable to initialize host decimation/filtering err=%d\n",
+							_devname(dev), res);
 				goto filter_cleanup;
 			}
 		}
@@ -824,7 +875,7 @@ int xtrx_run_ex(struct xtrx_dev* dev, const xtrx_run_params_t* params)
 			dev[devnum].tx_pkt_samples = (MAX_TX_MSPS / tx_stream_count);
 
 		} else if (((dev[devnum].tx_pkt_samples * tx_stream_count)) > MAX_TX_MSPS ) {
-			XTRXLL_LOG(XTRXLL_WARNING, "hardware TX burst size is too high: PKT:%d, lowering to %d\n",
+			XTRXLLS_LOG("XTRX", XTRXLL_WARNING, "hardware TX burst size is too high: PKT:%d, lowering to %d\n",
 					   dev[devnum].tx_pkt_samples, MAX_TX_MSPS / tx_stream_count);
 			//res = -EINVAL;
 			//goto failed_tx_init;
@@ -841,7 +892,8 @@ int xtrx_run_ex(struct xtrx_dev* dev, const xtrx_run_params_t* params)
 			unsigned i;
 
 			if (params->tx_repeat_buf) {
-				XTRXLL_LOG(XTRXLL_ERROR, "Host filtering doesn't work with repeat buffer\n");
+				XTRXLLS_LOG("XTRX", XTRXLL_ERROR, "%s: Host filtering doesn't work with repeat buffer\n",
+							_devname(dev));
 				res = -EINVAL;
 				goto failed_tx_init;
 			}
@@ -869,12 +921,14 @@ int xtrx_run_ex(struct xtrx_dev* dev, const xtrx_run_params_t* params)
 											   &dev[devnum].tx_host_filter[i]);
 				}
 			} else {
-				XTRXLL_LOG(XTRXLL_ERROR, "This TX host format is usnsupported for host filtering\n");
+				XTRXLLS_LOG("XTRX", XTRXLL_ERROR, "%s: This TX host format is usnsupported for host filtering\n",
+							_devname(dev));
 				res = -EINVAL;
 				goto failed_tx_init;
 			}
 			if (res) {
-				XTRXLL_LOG(XTRXLL_ERROR, "Unable to initialize host interpolation/filtering err=%d\n", res);
+				XTRXLLS_LOG("XTRX", XTRXLL_ERROR, "%s: Unable to initialize host interpolation/filtering err=%d\n",
+							_devname(dev), res);
 			}
 		}
 
@@ -903,7 +957,8 @@ int xtrx_run_ex(struct xtrx_dev* dev, const xtrx_run_params_t* params)
 							   tx_fe_fmt,
 							   tx_mode);
 		if (res) {
-			XTRXLL_LOG(XTRXLL_ERROR, "Unable to start DMA err=%d\n", res);
+			XTRXLLS_LOG("XTRX", XTRXLL_ERROR, "%s: Unable to start DMA err=%d\n",
+						_devname(&dev[devnum]), res);
 			goto fail_dma_start;
 		}
 	}
@@ -998,7 +1053,8 @@ enum processing_type {
 int xtrx_send_sync_ex(struct xtrx_dev* mdev, xtrx_send_ex_info_t *info)
 {
 	if (!mdev->tx_run) {
-		XTRXLL_LOG(XTRXLL_ERROR, "xtrx_send_sync_ex: TX stream is not configured\n");
+		XTRXLLS_LOG("XTRX", XTRXLL_ERROR, "%s: TX stream is not configured\n",
+					_devname(mdev));
 		return -ENOSTR;
 	}
 
@@ -1058,8 +1114,8 @@ got_buffer:
 			if ((info->flags & XTRX_TX_NO_DISCARD) == 0) {
 				uint16_t upd_late = cur_late - dev->txburt_late_prev;
 				if (dev->txskip_time > cur_wts) {
-					XTRXLL_LOG(XTRXLL_ERROR, "xtrx_send_burst_sync[%d]: TX DMA Current skip due to TO buffers: %d, prev: %d TS:%" PRId64 " STPS:%" PRId64 "\n",
-							   devnum, cur_late, dev->txburt_late_prev, cur_wts, dev->txskip_time);
+					XTRXLLS_LOG("XTRX", XTRXLL_ERROR, "%s: TX DMA Current skip due to TO buffers: %d, prev: %d TS:%" PRId64 " STPS:%" PRId64 "\n",
+							   _devname(dev), cur_late, dev->txburt_late_prev, cur_wts, dev->txskip_time);
 					dev->txburt_late_prev = cur_late;
 
 					info->out_flags |= XTRX_TX_DISCARDED_TO;
@@ -1067,8 +1123,8 @@ got_buffer:
 				}
 
 				if (upd_late > 8) {
-					XTRXLL_LOG(XTRXLL_ERROR, "xtrx_send_burst_sync[%d]: TX DMA Current delayed buffers: %d, prev: %d TS:%" PRId64 "\n",
-							   devnum, cur_late, dev->txburt_late_prev, cur_wts);
+					XTRXLLS_LOG("XTRX", XTRXLL_ERROR, "%s: TX DMA Current delayed buffers: %d, prev: %d TS:%" PRId64 "\n",
+							   _devname(dev), cur_late, dev->txburt_late_prev, cur_wts);
 					dev->txburt_late_prev = cur_late;
 					dev->txskip_time = cur_wts + 4*info->samples; // Discard  2x packets
 
@@ -1084,8 +1140,8 @@ got_buffer:
 			wire_buffer_size = dev->txbuf_total - dev->txbuf_processed;
 		}
 
-		XTRXLL_LOG(XTRXLL_DEBUG, "xtrx_send_burst_sync[%d]: Total=%u Processed=%u PTS=%" PRId64
-				   " cwts=%" PRId64 " UserTotal=%u UserProcessed=%u\n", devnum,
+		XTRXLLS_LOG("XTRX", XTRXLL_DEBUG, "%s: Total=%u Processed=%u PTS=%" PRId64
+				   " cwts=%" PRId64 " UserTotal=%u UserProcessed=%u\n", _devname(dev),
 				   dev->txbuf_total, dev->txbuf_processed, dev->txbuf_processed_ts, cur_wts,
 				   (unsigned)user_total, (unsigned)user_processed);
 
@@ -1211,8 +1267,8 @@ got_buffer:
 									 dev->txbuf_processed / 8);
 			dev->txbuf = NULL;
 			if (res) {
-				XTRXLL_LOG(XTRXLL_ERROR, "xtrxll_dma_tx_post res=%d (wts=%" PRIu64 " samples=%u)\n",
-						   res, cur_wts, (unsigned)wire_samples_consumed);
+				XTRXLLS_LOG("XTRX", XTRXLL_ERROR, "%s: xtrxll_dma_tx_post res=%d (wts=%" PRIu64 " samples=%u)\n",
+						   _devname(dev), res, cur_wts, (unsigned)wire_samples_consumed);
 				return res;
 			}
 		}
@@ -1236,7 +1292,8 @@ got_buffer:
 int xtrx_recv_sync_ex(struct xtrx_dev* mdev, xtrx_recv_ex_info_t* info)
 {
 	if (!mdev->rx_run) {
-		XTRXLL_LOG(XTRXLL_ERROR, "xtrx_recv_sync_ex: RX stream is not configured\n");
+		XTRXLLS_LOG("XTRX", XTRXLL_ERROR, "%s: RX stream is not configured\n",
+					_devname(mdev));
 		return -ENOSTR;
 	}
 
@@ -1326,9 +1383,9 @@ got_buffer:
 			info->out_first_sample = dev->rx_samples >> dev->rx_host_decim;
 		}
 
-		XTRXLL_LOG((dev->rxbuf_ts + dev->rxbuf_processed_ts != dev->rx_samples) ? XTRXLL_WARNING : XTRXLL_DEBUG,
-				   "xtrx_recv_sync[%d]: Total=%u Processed=%u UserTotal=%u UserProcessed=%u BUFTS=%" PRIu64 "+%" PRIu64 " OURTS=%" PRIu64 "\n",
-				   devnum, dev->rxbuf_total, dev->rxbuf_processed, (unsigned)user_total, (unsigned)user_processed,
+		XTRXLLS_LOG("XTRX", (dev->rxbuf_ts + dev->rxbuf_processed_ts != dev->rx_samples) ? XTRXLL_WARNING : XTRXLL_DEBUG,
+				   "%s: Total=%u Processed=%u UserTotal=%u UserProcessed=%u BUFTS=%" PRIu64 "+%" PRIu64 " OURTS=%" PRIu64 "\n",
+				   _devname(dev), dev->rxbuf_total, dev->rxbuf_processed, (unsigned)user_total, (unsigned)user_processed,
 				   dev->rxbuf_ts, dev->rxbuf_processed_ts, dev->rx_samples);
 
 		/* bytes need to fill in user */
@@ -1516,12 +1573,6 @@ got_buffer:
 	return res;
 }
 
-void xtrx_set_logfunction(xtrx_logfunc_t func)
-{
-	xtrxll_set_logfunc(func);
-}
-
-
 static int _xtrx_val_set_int(struct xtrx_dev* dev, xtrx_direction_t dir,
 				 xtrx_channel_t chan, xtrx_val_t type, uint64_t val)
 {
@@ -1531,21 +1582,21 @@ static int _xtrx_val_set_int(struct xtrx_dev* dev, xtrx_direction_t dir,
 
 	switch (type) {
 	case XTRX_LML_PHY_PHASE:
-		XTRXLL_LOG(XTRXLL_INFO, "Set LMS7 LML FCLK Phase to %d\n", (int)val);
+		XTRXLLS_LOG("XTRX", XTRXLL_INFO, "%s: Set LMS7 LML FCLK Phase to %d\n", _devname(dev), (int)val);
 		return xtrxll_mmcm_fphase_corr(dev->lldev, true, val, false);
 	case XTRX_LML_PHY_FBPHASE:
-		XTRXLL_LOG(XTRXLL_INFO, "Set LMS7 LML FB Phase to %d\n", (int)val);
+		XTRXLLS_LOG("XTRX", XTRXLL_INFO, "%s: Set LMS7 LML FB Phase to %d\n", _devname(dev), (int)val);
 		return xtrxll_mmcm_fphase_corr(dev->lldev, true, val, true);
 	case XTRX_LMS7_PWR_MODE:
-		XTRXLL_LOG(XTRXLL_INFO, "Set LMS7 power mode to %d\n", (int)val);
+		XTRXLLS_LOG("XTRX", XTRXLL_INFO, "%s: Set LMS7 power mode to %d\n", _devname(dev), (int)val);
 		return xtrxll_set_param(dev->lldev, XTRXLL_PARAM_PWR_MODE, val);
 	case XTRX_LMS7_VIO:
-		XTRXLL_LOG(XTRXLL_INFO, "Set LMS7 VIO to %d\n", (int)val);
+		XTRXLLS_LOG("XTRX", XTRXLL_INFO, "%s: Set LMS7 VIO to %d\n", _devname(dev), (int)val);
 		return xtrxll_set_param(dev->lldev, XTRXLL_PARAM_PWR_VIO, val);
 	case XTRX_LMS7_XSP_DC_IQ:
 		return dev->fe->ops->set_reg(dev->fe, chan, dir, type, val);
 	case XTRX_VCTCXO_DAC_VAL:
-		XTRXLL_LOG(XTRXLL_INFO, "Set XTRX DAC %d\n", (int)val);
+		XTRXLLS_LOG("XTRX", XTRXLL_INFO, "%s: Set XTRX DAC %d\n", _devname(dev), (int)val);
 		return xtrxll_set_param(dev->lldev, XTRXLL_PARAM_REF_DAC, val);
 	case XTRX_DSPFE_CMD:
 		return xtrxll_set_param(dev->lldev, XTRXLL_PARAM_DSPFE_CMD, val);
@@ -1637,3 +1688,17 @@ XTRX_API int xtrx_val_get(struct xtrx_dev* dev, xtrx_direction_t dir,
 	}
 	return res;
 }
+
+
+
+void xtrx_log_setfunc(xtrx_logfunc_t func)
+{
+	xtrxll_set_logfunc(func);
+}
+
+void xtrx_log_setlevel(int sevirity, const char sybsystem[4])
+{
+	(void)sybsystem;
+	xtrxll_set_loglevel(sevirity);
+}
+

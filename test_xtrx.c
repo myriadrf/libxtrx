@@ -282,7 +282,7 @@ int main(int argc, char** argv)
 	unsigned rx_sample_host_size = sizeof(float) * 2;
 	unsigned tx_sample_host_size = sizeof(float) * 2;
 
-	int loglevel = 4;
+	int loglevel = 2;
 	int mimomode = 0;
 	int tx_repeat_mode = 0;
 	int rxlfsr = 0;
@@ -494,6 +494,8 @@ int main(int argc, char** argv)
 		txsamplerate = 0;
 	}
 
+	xtrx_log_setlevel(loglevel, NULL);
+
 	char* data = NULL;
 	unsigned dev_count;
 	int res;
@@ -532,7 +534,7 @@ int main(int argc, char** argv)
 		res = xtrx_open_multi(j, (const char**)devices, loglevel, &dev);
 		dev_count = j;
 	} else {
-		res = xtrx_open(device, loglevel, &dev);
+		res = xtrx_open(device, loglevel | XTRX_O_RESET, &dev);
 		dev_count = 1;
 	}
 	if (res) {

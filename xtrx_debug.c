@@ -61,7 +61,7 @@ int xtrx_debug_process_cmd(xtrx_debug_ctx_t* ctx, const char *cmd, unsigned len,
 			uint64_t ch = (chans == 'A') ? 1 :
 						  (chans == 'B') ? 2 :
 						  (chans == 'C') ? 3 : 0;
-			XTRXLL_LOG(XTRXLL_INFO, "xtrx_debug: LMS write to 0x%08x (%c => %d)\n",
+			XTRXLLS_LOG("DBGP", XTRXLL_INFO, "LMS write to 0x%08x (%c => %d)\n",
 					   reg, chans, (int)ch);
 			uint64_t v = (ch << 32) | reg;
 			res = ctx->ops->param_io(ctx->obj,
@@ -69,7 +69,7 @@ int xtrx_debug_process_cmd(xtrx_debug_ctx_t* ctx, const char *cmd, unsigned len,
 									 v,
 									 &oval);
 		} else {
-			XTRXLL_LOG(XTRXLL_ERROR, "xtrx_debug: LMS failed to parse! %d\n", cnt);
+			XTRXLLS_LOG("DBGP", XTRXLL_ERROR, "LMS failed to parse! %d\n", cnt);
 		}
 	} else if(strncmp(cmd, "TMP", 3) == 0) {
 		res = ctx->ops->param_io(ctx->obj, DEBUG_BOARD_TEMP, 0, &oval);
@@ -102,7 +102,7 @@ int xtrx_debug_process_cmd(xtrx_debug_ctx_t* ctx, const char *cmd, unsigned len,
 		if (res)
 			goto fail;
 	} else {
-		XTRXLL_LOG(XTRXLL_ERROR, "xtrx_debug: unrecognised command! %c\n", cmd[0]);
+		XTRXLLS_LOG("DBGP", XTRXLL_ERROR, "unrecognised command! %c\n", cmd[0]);
 	}
 
 fail:
@@ -119,14 +119,14 @@ static void* _xtrx_thread(void* param)
 	int ret;
 	struct sockaddr_un name;
 	xtrx_debug_ctx_t* ctx = (xtrx_debug_ctx_t*)param;
-	XTRXLL_LOG(XTRXLL_INFO, "Starting XTRX debug thread\n");
+	XTRXLLS_LOG("DBGP", XTRXLL_INFO, "Starting XTRX debug thread\n");
 	pthread_setcanceltype(PTHREAD_CANCEL_DEFERRED, NULL);
 	const char* fifoname = "xtrx_debug_pipe";
 	unlink(fifoname);
 
 	int sock = socket(AF_UNIX, SOCK_STREAM, 0);
 	if (sock == -1) {
-		XTRXLL_LOG(XTRXLL_INFO, "Unable to create socket: error %d\n", errno);
+		XTRXLLS_LOG("DBGP", XTRXLL_INFO, "Unable to create socket: error %d\n", errno);
 		return NULL;
 	}
 
@@ -137,14 +137,14 @@ static void* _xtrx_thread(void* param)
 	ret = bind(sock, (const struct sockaddr *) &name,
 			   sizeof(struct sockaddr_un));
 	if (ret == -1) {
-		XTRXLL_LOG(XTRXLL_INFO, "Unable to bind socket: error %d\n", errno);
+		XTRXLLS_LOG("DBGP", XTRXLL_INFO, "Unable to bind socket: error %d\n", errno);
 		close(sock);
 		return NULL;
 	}
 
 	ret = listen(sock, 20);
 	if (ret == -1) {
-		XTRXLL_LOG(XTRXLL_INFO, "Unable to tisten to socket: error %d\n", errno);
+		XTRXLLS_LOG("DBGP", XTRXLL_INFO, "Unable to tisten to socket: error %d\n", errno);
 		close(sock);
 		return NULL;
 	}
@@ -155,11 +155,11 @@ static void* _xtrx_thread(void* param)
 		int data_socket = accept(sock, NULL, NULL);
 		ctx->clifd = data_socket;
 		if (data_socket == -1) {
-			XTRXLL_LOG(XTRXLL_INFO, "Unable to accept socket: error %d\n", errno);
+			XTRXLLS_LOG("DBGP", XTRXLL_INFO, "Unable to accept socket: error %d\n", errno);
 			close(sock);
 			return NULL;
 		}
-		XTRXLL_LOG(XTRXLL_INFO, "Connection established\n");
+		XTRXLLS_LOG("DBGP", XTRXLL_INFO, "Connection established\n");
 
 		unsigned p = 0;
 		char buffer[4096];
@@ -169,7 +169,7 @@ static void* _xtrx_thread(void* param)
 		for (;;) {
 			ssize_t res = read(data_socket, p + buffer, sizeof(buffer) - p);
 			if (res <= 0) {
-				XTRXLL_LOG(XTRXLL_INFO, "Connection closed\n");
+				XTRXLLS_LOG("DBGP", XTRXLL_INFO, "Connection closed\n");
 				goto connection_closed;
 			}
 
@@ -177,7 +177,7 @@ static void* _xtrx_thread(void* param)
 			if (end == NULL) {
 				p += res;
 				if (p == sizeof(buffer)) {
-					XTRXLL_LOG(XTRXLL_INFO, "Incorrect CMD!\n");
+					XTRXLLS_LOG("DBGP", XTRXLL_INFO, "Incorrect CMD!\n");
 					close(data_socket);
 					goto connection_closed;
 				}
@@ -195,7 +195,7 @@ static void* _xtrx_thread(void* param)
 
 			ssize_t ech = end - (p + buffer);
 			if (ech > res) {
-				XTRXLL_LOG(XTRXLL_INFO, "Moving extra %d/%d bytes\n",
+				XTRXLLS_LOG("DBGP", XTRXLL_INFO, "Moving extra %d/%d bytes\n",
 						   (int)ech, (int)res);
 
 				memmove(buffer, end + 1, ech - res);
@@ -221,7 +221,7 @@ int xtrx_debug_init(const char *params,
 	int fd = mkfifo(fifoname, 0666);
 	if (fd < 0 && errno != EEXIST) {
 		int err = -errno;
-		XTRXLL_LOG(XTRXLL_ERROR, "xtrx_debug: Unable to create FIFO file `%s`, error %d\n",
+		XTRXLLS_LOG("DBGP", XTRXLL_ERROR, "Unable to create FIFO file `%s`, error %d\n",
 				   fifoname, err);
 		return err;
 	}

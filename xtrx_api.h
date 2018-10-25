@@ -22,6 +22,8 @@
 
 #include <stdint.h>
 #include <stddef.h>
+#include <stdarg.h>
+#include <time.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -32,8 +34,17 @@ extern "C" {
 
 /* High level API function */
 
-typedef void (*xtrx_logfunc_t)(int sevirity, const char* message);
-XTRX_API void xtrx_set_logfunction(xtrx_logfunc_t func);
+typedef void (*xtrx_logfunc_t)(int sevirity,
+							   const struct tm* stm,
+							   int nsec,
+							   const char sybsystem[4],
+							   const char* function,
+							   const char* file,
+							   int line_no,
+							   const char* fmt,
+							   va_list list);
+XTRX_API void xtrx_log_setfunc(xtrx_logfunc_t func);
+XTRX_API void xtrx_log_setlevel(int sevirity, const char sybsystem[4]);
 
 
 struct xtrx_dev;
@@ -50,17 +61,6 @@ enum xtrx_flags {
  */
 typedef uint64_t master_ts;
 
-typedef enum xtrx_open_flags {
-	XTRX_CLAIM_DEV = 1, /**< claim exclusive access to the device (reqired for DMA access) */
-	XTRX_CLAIM_UART_SIM = 2, /**< claim exclusive access to SIM card interface */
-	XTRX_CLAIM_UART_GPS = 4, /**< claim exclusive access to GPS UART interface */
-} xtrx_open_flags_t;
-
-typedef struct xtrx_open_params {
-	unsigned loglevel;
-	xtrx_open_flags_t flags;
-	const char* const* multidev;
-} xtrx_open_params_t;
 
 /** Open XTRX device
  * @param device    Path to XTRX /dev entry
@@ -70,6 +70,14 @@ typedef struct xtrx_open_params {
  */
 XTRX_API int xtrx_open(const char* device, unsigned flags, struct xtrx_dev** dev);
 
+/** Open XTRX composed of multiply devices
+ * @brief xtrx_open_multi
+ * @param numdevs
+ * @param devices
+ * @param flags
+ * @param dev
+ * @return
+ */
 XTRX_API int xtrx_open_multi(unsigned numdevs, const char** devices, unsigned flags, struct xtrx_dev** dev);
 
 /** Close XTRX device
@@ -90,7 +98,7 @@ typedef enum xtrx_clock_source {
 	XTRX_CLKSRC_EXT_W1PPS_SYNC = 2,
 } xtrx_clock_source_t;
 
-XTRX_API void xtrx_set_ref_clk(struct xtrx_dev* dev, unsigned refclkhz, xtrx_clock_source_t clksrc);
+XTRX_API int xtrx_set_ref_clk(struct xtrx_dev* dev, unsigned refclkhz, xtrx_clock_source_t clksrc);
 
 enum {
 	XTRX_DEVINFO_UNIQNAME_MAX = 64,

@@ -147,7 +147,11 @@ static struct xtrx_nfe_lms7* get_nfe(struct lms7_state* s)
 	return (struct xtrx_nfe_lms7*)((char*)s - offsetof(struct xtrx_nfe_lms7, lms_state));
 }
 
-void lms7_log(struct lms7_state* s, const char* fmt, ...)
+void lms7_log_ex(struct lms7_state* s,
+				 const char* function,
+				 const char* file,
+				 int line_no,
+				 const char* fmt, ...)
 {
 	struct xtrx_nfe_lms7* nfe = get_nfe(s);
 	char logbuffer[1024];
@@ -162,8 +166,8 @@ void lms7_log(struct lms7_state* s, const char* fmt, ...)
 		logbuffer[0] = 0;
 	va_end(ap);
 
-	xtrxll_log(XTRXLL_INFO, "RFIC_NLMS7", 0, "NLMS7 %s: %s\n",
-			   xtrxll_get_name(nfe->lldev), logbuffer);
+	xtrxll_log(XTRXLL_INFO, "LSM7", function, file, line_no,
+			   "%s: %s\n", xtrxll_get_name(nfe->lldev), logbuffer);
 }
 
 int lms7_spi_transact(struct lms7_state* s, uint16_t ival, uint32_t* oval)
@@ -185,8 +189,9 @@ int lms7_spi_post(struct lms7_state* s, const unsigned count, const uint32_t* re
 
 static int _xtrx_set_lna_rx(struct xtrx_nfe_lms7 *dev, int band)
 {
-	XTRXLL_LOG(XTRXLL_INFO, "Set RX band to %d (%c)\n", band,
-			   band == RFE_LNAW ? 'W' : band == RFE_LNAH ? 'H' : band == RFE_LNAL ? 'L' : '-');
+	XTRXLLS_LOG("LMSF", XTRXLL_INFO, "%s: Set RX band to %d (%c)\n",
+				xtrxll_get_name(dev->lldev), band,
+				band == RFE_LNAW ? 'W' : band == RFE_LNAH ? 'H' : band == RFE_LNAL ? 'L' : '-');
 
 	int res = lms7_rfe_set_path(&dev->lms_state, band,
 								dev->rx_run_a, dev->rx_run_b);
@@ -202,7 +207,8 @@ static int _xtrx_set_lna_rx(struct xtrx_nfe_lms7 *dev, int band)
 
 static int _xtrx_set_lna_tx(struct xtrx_nfe_lms7 *dev, int band)
 {
-	XTRXLL_LOG(XTRXLL_INFO, "Set TX band to %d\n", band);
+	XTRXLLS_LOG("LMSF", XTRXLL_INFO, "%s: Set TX band to %d\n",
+				xtrxll_get_name(dev->lldev), band);
 
 	int res = lms7_trf_set_path(&dev->lms_state, band);
 	if (res)
@@ -243,7 +249,8 @@ static int _xtrx_signal_event(struct xtrx_nfe_lms7 *dev, enum sigtype t)
 		if (dev->rx_lna_auto) {
 			int band = (dev->rx_lo > 2200e6) ? RFE_LNAH :
 					   (dev->rx_lo > 1500e6) ? RFE_LNAW : RFE_LNAL;
-			XTRXLL_LOG(XTRXLL_INFO, "Auto RX band selection: %s\n", get_band_name(band));
+			XTRXLLS_LOG("LMSF", XTRXLL_INFO, "%s: Auto RX band selection: %s\n",
+						xtrxll_get_name(dev->lldev), get_band_name(band));
 			res = _xtrx_set_lna_rx(dev, band);
 		}
 		break;
@@ -251,13 +258,15 @@ static int _xtrx_signal_event(struct xtrx_nfe_lms7 *dev, enum sigtype t)
 	case XTRX_TX_LNA_CHANGED:
 		if (dev->tx_lna_auto) {
 			int band = (dev->tx_lo > 2200e6) ? 1 : 2;
-			XTRXLL_LOG(XTRXLL_INFO, "Auto TX band selection: %d\n", band);
+			XTRXLLS_LOG("LMSF", XTRXLL_INFO, "%s: Auto TX band selection: %d\n",
+						xtrxll_get_name(dev->lldev), band);
 			res = _xtrx_set_lna_tx(dev, band);
 		}
 		break;
 	}
 
-	XTRXLL_LOG(XTRXLL_INFO, "DC START\n");
+	XTRXLLS_LOG("LMSF", XTRXLL_INFO, "%s: DC START\n",
+				xtrxll_get_name(dev->lldev));
 	res = lms7_dc_start(&dev->lms_state,
 						dev->rx_run_a, dev->rx_run_b,
 						dev->tx_run_a, dev->tx_run_b);
@@ -340,11 +349,11 @@ int lms7nfe_init(struct xtrxll_dev* lldev,
 	}
 
 	if (XTRX_O_RESET & flags) {
+		usleep(10000);
 		res = xtrxll_set_param(dev->lldev, XTRXLL_PARAM_FE_CTRL, 0);
 		if (res) {
 			goto failed_lms7;
 		}
-
 		usleep(10000);
 	}
 
@@ -355,6 +364,7 @@ int lms7nfe_init(struct xtrxll_dev* lldev,
 	if (res) {
 		goto failed_lms7;
 	}
+	usleep(1000);
 
 	res = lms7_enable(&dev->lms_state);
 	if (res) {
@@ -460,18 +470,18 @@ int lms7nfe_dd_set_samplerate(struct xtrx_fe_obj* obj,
 	const int rx_gen = (rx_port == 2) ? lml2_use_mmcm : lml1_use_mmcm;
 
 	if (l2_pid == 0 && l1_pid == 0) {
-		XTRXLL_LOG(XTRXLL_ERROR, "Incorrect FPGA port configuration HWID=%08x => TX=%d RX=%d\n",
-				   hwid, tx_port, rx_port);
+		XTRXLLS_LOG("LMSF", XTRXLL_ERROR, "%s: Incorrect FPGA port configuration HWID=%08x => TX=%d RX=%d\n",
+				   xtrxll_get_name(dev->lldev), hwid, tx_port, rx_port);
 		return -EFAULT;
 	}
 	if ((rxrate > 1) && (!lml1_rx_valid && !lml2_rx_valid)) {
-		XTRXLL_LOG(XTRXLL_ERROR, "Current FPGA configuration doesn't support RX, HWID=%08x\n",
-				   hwid);
+		XTRXLLS_LOG("LMSF", XTRXLL_ERROR, "%s: Current FPGA configuration doesn't support RX, HWID=%08x\n",
+				   xtrxll_get_name(dev->lldev), hwid);
 		return -EFAULT;
 	}
 	if ((txrate > 1) && (!lml1_tx_valid && !lml2_tx_valid)) {
-		XTRXLL_LOG(XTRXLL_ERROR, "Current FPGA configuration doesn't support TX, HWID=%08x\n",
-				   hwid);
+		XTRXLLS_LOG("LMSF", XTRXLL_ERROR, "%s: Current FPGA configuration doesn't support TX, HWID=%08x\n",
+				   xtrxll_get_name(dev->lldev), hwid);
 		return -EFAULT;
 	}
 
@@ -502,9 +512,9 @@ int lms7nfe_dd_set_samplerate(struct xtrx_fe_obj* obj,
 
 		/* check what we can deliver */
 		if (tx_host_mul > 2) {
-			XTRXLL_LOG(XTRXLL_ERROR, "xtrx_set_samplerate: %d extra TX "
+			XTRXLLS_LOG("LMSF", XTRXLL_ERROR, "%s: %d extra TX "
 									 "interpolation; however, it's not supported yet...\n",
-					   tx_host_mul);
+					   xtrxll_get_name(dev->lldev), tx_host_mul);
 			return -EINVAL;
 		}
 	}
@@ -519,8 +529,8 @@ int lms7nfe_dd_set_samplerate(struct xtrx_fe_obj* obj,
 	double rxmaster_min = dacdiv * inrates->dac.hwrate;
 	cgen_rate = MAX(txmaster_min, rxmaster_min);
 
-	XTRXLL_LOG(XTRXLL_DEBUG, "xtrx_set_samplerate: TXm = %.3f RXm = %.3f\n",
-			   txmaster_min / 1e6, rxmaster_min / 1e6);
+	XTRXLLS_LOG("LMSF", XTRXLL_DEBUG, "%s: TXm = %.3f RXm = %.3f\n",
+			   xtrxll_get_name(dev->lldev), txmaster_min / 1e6, rxmaster_min / 1e6);
 
 	// TODO: determine best possible combination of adcdiv / dacdiv, just
 	// for now we use fixed 4 divider for both
@@ -538,7 +548,7 @@ int lms7nfe_dd_set_samplerate(struct xtrx_fe_obj* obj,
 				if (rx_ndiv > LMS7_DECIM_MAX || tx_ndiv > LMS7_INTER_MAX)
 					break;
 
-				XTRXLL_LOG(XTRXLL_INFO, "Increase RXdiv=%2d TXdiv=%2d => CGEN %03.1f Mhz\n",
+				XTRXLLS_LOG("LMSF", XTRXLL_INFO, "Increase RXdiv=%2d TXdiv=%2d => CGEN %03.1f Mhz\n",
 						   rx_ndiv, tx_ndiv, cgen_rate * 2 / 1.0e6);
 			}
 		}
@@ -552,17 +562,17 @@ int lms7nfe_dd_set_samplerate(struct xtrx_fe_obj* obj,
 	}
 
 	if (rxrate > 1 && !_check_lime_decimation(rxdiv)) {
-		XTRXLL_LOG(XTRXLL_ERROR, "xtrx_set_samplerate: can't deliver "
+		XTRXLLS_LOG("LMSF", XTRXLL_ERROR, "%s: can't deliver "
 								 "decimation: %d of %.3f MHz CGEN and %.3f MHz samplerate; TXm = %.3f RXm = %.3f\n",
-				   rxdiv, cgen_rate / 1e6, rxrate / 1e6,
+				   xtrxll_get_name(dev->lldev), rxdiv, cgen_rate / 1e6, rxrate / 1e6,
 				   txmaster_min / 1e6, rxmaster_min / 1e6);
 		return -EINVAL;
 	}
 
 	if (txrate > 1 && !_check_lime_decimation(txdiv)) {
-		XTRXLL_LOG(XTRXLL_ERROR, "xtrx_set_samplerate: can't deliver "
+		XTRXLLS_LOG("LMSF", XTRXLL_ERROR, "%s: can't deliver "
 								 "interpolation: %d of %.3f MHz CGEN and %.3f MHz samplerate; TXm = %.3f RXm = %.3f\n",
-				   txdiv, cgen_rate / 1e6, txrate / 1e6,
+				   xtrxll_get_name(dev->lldev), txdiv, cgen_rate / 1e6, txrate / 1e6,
 				   txmaster_min / 1e6, rxmaster_min / 1e6);
 		return -EINVAL;
 	}
@@ -570,8 +580,9 @@ int lms7nfe_dd_set_samplerate(struct xtrx_fe_obj* obj,
 
 	if (((dev->rx_run_a || dev->rx_run_b) && (dev->rx_host_decim != rx_host_decim)) ||
 		((dev->tx_run_b || dev->tx_run_b) && (dev->tx_host_inter != tx_host_inter))) {
-		XTRXLL_LOG(XTRXLL_ERROR, "xtrx_set_samplerate: can't change extra "
-				   "host decimation when stream is running\n");
+		XTRXLLS_LOG("LMSF", XTRXLL_ERROR, "%s: can't change extra "
+				   "host decimation when stream is running\n",
+					xtrxll_get_name(dev->lldev));
 		return -EINVAL;
 	}
 
@@ -614,7 +625,8 @@ int lms7nfe_dd_set_samplerate(struct xtrx_fe_obj* obj,
 		}
 	}
 	if (res != 0) {
-		XTRXLL_LOG(XTRXLL_ERROR, "xtrx_set_samplerate: can't tune VCO for data clock\n");
+		XTRXLLS_LOG("LMSF", XTRXLL_ERROR, "%s: can't tune VCO for data clock\n",
+					xtrxll_get_name(dev->lldev));
 		return -ERANGE;
 	}
 	dev->cgen_clk = cgen_rate;
@@ -704,11 +716,13 @@ int lms7nfe_dd_set_samplerate(struct xtrx_fe_obj* obj,
 		tx_mclk = actualmaster / dacdiv / txtsp_div;
 		int mclk = tx_mclk;
 
-		XTRXLL_LOG(XTRXLL_ERROR, "TX MCLK=%.3f (extra %d) MHz\n",
-				   mclk / 1.0e6, (((slow_mclk_tx_x2) ? slow_factor : 1)));
+		XTRXLLS_LOG("LMSF", XTRXLL_ERROR, "%s: TX MCLK=%.3f (extra %d) MHz\n",
+				   xtrxll_get_name(dev->lldev),
+					mclk / 1.0e6, (((slow_mclk_tx_x2) ? slow_factor : 1)));
 		res = xtrxll_mmcm_onoff(dev->lldev, true, true);
 		if (res) {
-			XTRXLL_LOG(XTRXLL_ERROR, "xtrx_set_samplerate: can't turn on TX MMCM\n");
+			XTRXLLS_LOG("LMSF", XTRXLL_ERROR, "%s: can't turn on TX MMCM\n",
+						xtrxll_get_name(dev->lldev));
 			return -EFAULT;
 		}
 
@@ -720,7 +734,8 @@ int lms7nfe_dd_set_samplerate(struct xtrx_fe_obj* obj,
 								  &dev->tx_mmcm_div,
 								  (slow_mclk_tx_x2) ? 2 * slow_factor : 2);
 		if (res != 0) {
-			XTRXLL_LOG(XTRXLL_ERROR, "Unable to configure TX MMCM to %d res = %d\n", mclk, res);
+			XTRXLLS_LOG("LMSF", XTRXLL_ERROR, "%s: Unable to configure TX MMCM to %d res = %d\n",
+						xtrxll_get_name(dev->lldev), mclk, res);
 			return -ERANGE;
 		}
 	} else {
@@ -736,10 +751,12 @@ int lms7nfe_dd_set_samplerate(struct xtrx_fe_obj* obj,
 		//int mclk = 2 * actualmaster / rxdiv / adcdiv_fixed / ((rx_no_decim  && rxdiv == 1) ? 2 : 1);
 		rx_mclk = actualmaster / adcdiv_fixed / rxtsp_div;
 		int mclk = rx_mclk;
-		XTRXLL_LOG(XTRXLL_ERROR, "RX MCLK=%.3f (%d extra) MHz\n", mclk / 1.0e6, (((slow_mclk_rx_x2) ? slow_factor : 1)));
+		XTRXLLS_LOG("LMSF", XTRXLL_ERROR, "%s: RX MCLK=%.3f (%d extra) MHz\n",
+					xtrxll_get_name(dev->lldev), mclk / 1.0e6, (((slow_mclk_rx_x2) ? slow_factor : 1)));
 		res = xtrxll_mmcm_onoff(dev->lldev, false, true);
 		if (res) {
-			XTRXLL_LOG(XTRXLL_ERROR, "xtrx_set_samplerate: can't turn on RX MMCM\n");
+			XTRXLLS_LOG("LMSF", XTRXLL_ERROR, "%s: can't turn on RX MMCM\n",
+						xtrxll_get_name(dev->lldev));
 			return -EFAULT;
 		}
 		usleep(10*1000);
@@ -752,7 +769,8 @@ int lms7nfe_dd_set_samplerate(struct xtrx_fe_obj* obj,
 								  &dev->rx_mmcm_div,
 								  (slow_mclk_rx_x2) ? 2 * slow_factor : 2);
 		if (res != 0) {
-			XTRXLL_LOG(XTRXLL_ERROR, "Unable to configure RX MMCM to %d res = %d\n", mclk, res);
+			XTRXLLS_LOG("LMSF", XTRXLL_ERROR, "%s: Unable to configure RX MMCM to %d res = %d\n",
+						xtrxll_get_name(dev->lldev), mclk, res);
 			return -ERANGE;
 		}
 	} else {
@@ -760,11 +778,12 @@ int lms7nfe_dd_set_samplerate(struct xtrx_fe_obj* obj,
 	}
 
 
-	XTRXLL_LOG(XTRXLL_INFO, "xtrx_set_samplerate: rxrate=%.3fMHz txrate=%.3fMHz"
+	XTRXLLS_LOG("LMSF", XTRXLL_INFO, "%s: rxrate=%.3fMHz txrate=%.3fMHz"
 							" actual_master=%.3fMHz rxdecim=%d(h_%d) txinterp=%d(h_%d)"
 							" RX_ADC=%.3fMHz TX_DAC=%.3fMHz hintr=%d hdecim=%d delay=%d NRXFWD=%d LML1HID=%d LML2HID=%d"
 							" RX_div=%d TX_div=%d RX_TSP_div=%d TX_TSP_div=%d FclkRX=%.3f (PHS=%d)"
 							" RXx2=%d\n",
+				xtrxll_get_name(dev->lldev),
 			   rxrate / 1e6, txrate / 1e6,
 			   actualmaster / 1e6, rxdiv, rx_host_div, txdiv, tx_host_mul,
 			   cgen_rate / adcdiv_fixed / 1e6, cgen_rate / dacdiv / 1e6,
@@ -906,8 +925,8 @@ int lms7nfe_dd_configure(struct xtrx_nfe_lms7* dev,
 	if (res)
 		return res;
 
-	XTRXLL_LOG(XTRXLL_INFO, "AFE: TX=[%d;%d] RX=[%d;%d]\n",
-			   txafen_a, txafen_b, rxafen_a, rxafen_b);
+	XTRXLLS_LOG("LMSF", XTRXLL_INFO, "%s: AFE TX=[%d;%d] RX=[%d;%d]\n",
+			   xtrxll_get_name(dev->lldev), txafen_a, txafen_b, rxafen_a, rxafen_b);
 
 	if (dir & XTRX_RX) {
 		res = lms7_mac_set(&dev->lms_state, rx_lmschan);
@@ -950,13 +969,15 @@ int lms7nfe_dd_configure(struct xtrx_nfe_lms7* dev,
 					return res;
 			}
 			if (dev->rx_bw[ich].set) {
-				XTRXLL_LOG(XTRXLL_INFO, "RBB: Restore BW[%d]=%d\n", ich, dev->rx_bw[ich].value);
+				XTRXLLS_LOG("LMSF", XTRXLL_INFO, "%s: RBB Restore BW[%d]=%d\n",
+							xtrxll_get_name(dev->lldev), ich, dev->rx_bw[ich].value);
 				res = lms7_rbb_set_bandwidth(&dev->lms_state, dev->rx_bw[ich].value);
 				if (res)
 					return res;
 			}
 			if (dev->rx_dsp[ich].set) {
-				XTRXLL_LOG(XTRXLL_INFO, "RBB: Restore DSP[%d]=%d\n", ich, dev->rx_dsp[ich].value);
+				XTRXLLS_LOG("LMSF", XTRXLL_INFO, "%s: RBB Restore DSP[%d]=%d\n",
+							xtrxll_get_name(dev->lldev), ich, dev->rx_dsp[ich].value);
 				res = lms7_rxtsp_cmix(&dev->lms_state, dev->rx_dsp[ich].value);
 				if (res)
 					return res;
@@ -982,7 +1003,7 @@ int lms7nfe_dd_configure(struct xtrx_nfe_lms7* dev,
 
 		// Restore requested BW
 		if (dev->rx_bw[0].set && (rx_lmschan & LMS7_CH_A)) {
-			XTRXLL_LOG(XTRXLL_INFO, "RBB: Restore BW[A]=%d\n", dev->rx_bw[0].value);
+			XTRXLLS_LOG("LMSF", XTRXLL_INFO, "RBB: Restore BW[A]=%d\n", dev->rx_bw[0].value);
 			res = lms7_mac_set(&dev->lms_state, LMS7_CH_A);
 			if (res)
 				return res;
@@ -991,7 +1012,7 @@ int lms7nfe_dd_configure(struct xtrx_nfe_lms7* dev,
 				return res;
 		}
 		if (dev->rx_bw[1].set && (rx_lmschan & LMS7_CH_B)) {
-			XTRXLL_LOG(XTRXLL_INFO, "RBB: Restore BW[B]=%d\n", dev->rx_bw[1].value);
+			XTRXLLS_LOG("LMSF", XTRXLL_INFO, "RBB: Restore BW[B]=%d\n", dev->rx_bw[1].value);
 			res = lms7_mac_set(&dev->lms_state, LMS7_CH_B);
 			if (res)
 				return res;
@@ -1002,7 +1023,7 @@ int lms7nfe_dd_configure(struct xtrx_nfe_lms7* dev,
 
 		//Restore CMIX configuration
 		if (dev->rx_dsp[0].set && (rx_lmschan & LMS7_CH_A)) {
-			XTRXLL_LOG(XTRXLL_INFO, "RBB: Restore DSP[A]=%d\n", dev->rx_dsp[0].value);
+			XTRXLLS_LOG("LMSF", XTRXLL_INFO, "RBB: Restore DSP[A]=%d\n", dev->rx_dsp[0].value);
 			res = lms7_mac_set(&dev->lms_state, LMS7_CH_A);
 			if (res)
 				return res;
@@ -1011,7 +1032,7 @@ int lms7nfe_dd_configure(struct xtrx_nfe_lms7* dev,
 				return res;
 		}
 		if (dev->rx_dsp[1].set && (rx_lmschan & LMS7_CH_B)) {
-			XTRXLL_LOG(XTRXLL_INFO, "RBB: Restore DSP[B]=%d\n", dev->rx_dsp[1].value);
+			XTRXLLS_LOG("LMSF", XTRXLL_INFO, "RBB: Restore DSP[B]=%d\n", dev->rx_dsp[1].value);
 			res = lms7_mac_set(&dev->lms_state, LMS7_CH_B);
 			if (res)
 				return res;
@@ -1054,13 +1075,15 @@ int lms7nfe_dd_configure(struct xtrx_nfe_lms7* dev,
 					return res;
 			}
 			if (dev->tx_bw[ich].set) {
-				XTRXLL_LOG(XTRXLL_INFO, "TBB: Restore BW[%d]=%d\n", ich, dev->tx_bw[ich].value);
+				XTRXLLS_LOG("LMSF", XTRXLL_INFO, "%s: TBB Restore BW[%d]=%d\n",
+							xtrxll_get_name(dev->lldev), ich, dev->tx_bw[ich].value);
 				res = lms7_tbb_set_bandwidth(&dev->lms_state, dev->tx_bw[ich].value);
 				if (res)
 					return res;
 			}
 			if (dev->tx_dsp[ich].set) {
-				XTRXLL_LOG(XTRXLL_INFO, "TBB: Restore DSP[%d]=%d\n", ich, dev->tx_dsp[ich].value);
+				XTRXLLS_LOG("LMSF", XTRXLL_INFO, "%s: TBB Restore DSP[%d]=%d\n",
+							xtrxll_get_name(dev->lldev), ich, dev->tx_dsp[ich].value);
 				res = lms7_txtsp_cmix(&dev->lms_state, dev->tx_dsp[ich].value);
 				if (res)
 					return res;
@@ -1087,7 +1110,7 @@ int lms7nfe_dd_configure(struct xtrx_nfe_lms7* dev,
 
 		// Restore requested BW
 		if (dev->tx_bw[0].set && (tx_lmschan & LMS7_CH_A)) {
-			XTRXLL_LOG(XTRXLL_INFO, "TBB: Restore BW[A]=%d\n", dev->tx_bw[0].value);
+			XTRXLLS_LOG("LMSF", XTRXLL_INFO, "TBB: Restore BW[A]=%d\n", dev->tx_bw[0].value);
 			res = lms7_mac_set(&dev->lms_state, LMS7_CH_A);
 			if (res)
 				return res;
@@ -1096,7 +1119,7 @@ int lms7nfe_dd_configure(struct xtrx_nfe_lms7* dev,
 				return res;
 		}
 		if (dev->tx_bw[1].set && (tx_lmschan & LMS7_CH_B)) {
-			XTRXLL_LOG(XTRXLL_INFO, "TBB: Restore BW[B]=%d\n", dev->tx_bw[1].value);
+			XTRXLLS_LOG("LMSF", XTRXLL_INFO, "TBB: Restore BW[B]=%d\n", dev->tx_bw[1].value);
 			res = lms7_mac_set(&dev->lms_state, LMS7_CH_B);
 			if (res)
 				return res;
@@ -1106,7 +1129,7 @@ int lms7nfe_dd_configure(struct xtrx_nfe_lms7* dev,
 		}
 		//Restore CMIX configuration
 		if (dev->tx_dsp[0].set && (tx_lmschan & LMS7_CH_A)) {
-			XTRXLL_LOG(XTRXLL_INFO, "TBB: Restore DSP[A]=%d\n", dev->tx_dsp[0].value);
+			XTRXLLS_LOG("LMSF", XTRXLL_INFO, "TBB: Restore DSP[A]=%d\n", dev->tx_dsp[0].value);
 			res = lms7_mac_set(&dev->lms_state, LMS7_CH_A);
 			if (res)
 				return res;
@@ -1115,7 +1138,7 @@ int lms7nfe_dd_configure(struct xtrx_nfe_lms7* dev,
 				return res;
 		}
 		if (dev->tx_dsp[1].set && (tx_lmschan & LMS7_CH_B)) {
-			XTRXLL_LOG(XTRXLL_INFO, "TBB: Restore DSP[B]=%d\n", dev->tx_dsp[1].value);
+			XTRXLLS_LOG("LMSF", XTRXLL_INFO, "TBB: Restore DSP[B]=%d\n", dev->tx_dsp[1].value);
 			res = lms7_mac_set(&dev->lms_state, LMS7_CH_B);
 			if (res)
 				return res;
@@ -1140,11 +1163,13 @@ int lms7nfe_dd_configure(struct xtrx_nfe_lms7* dev,
 
 	unsigned nlml_mode = dev->lml_mode;
 	if (params->nflags & XTRX_RUN_DIGLOOPBACK) {
-		XTRXLL_LOG(XTRXLL_INFO, "Enable digital loopback\n");
+		XTRXLLS_LOG("LMSF", XTRXLL_INFO, "%s: Enable digital loopback\n",
+					xtrxll_get_name(dev->lldev));
 		nlml_mode |= LML_LOOPBACK;
 	}
 	if (params->nflags & XTRX_RUN_RXLFSR) {
-		XTRXLL_LOG(XTRXLL_INFO, "Enable RX LFSR\n");
+		XTRXLLS_LOG("LMSF", XTRXLL_INFO, "%s: Enable RX LFSR\n",
+					xtrxll_get_name(dev->lldev));
 		nlml_mode |= LML_RXLFSR;
 	}
 
@@ -1236,8 +1261,9 @@ int lms7nfe_bb_set_freq(struct xtrx_fe_obj* obj,
 		double tx_dac_freq = dev->cgen_clk / dev->txcgen_div;
 		rel_freq = freq / tx_dac_freq;
 		if (rel_freq > 0.5 || rel_freq < -0.5) {
-			XTRXLL_LOG(XTRXLL_WARNING,
-					   "NCO TX ouf of range, requested %.3f while DAC %.3f\n",
+			XTRXLLS_LOG("LMSF", XTRXLL_WARNING,
+					   "%s: NCO TX ouf of range, requested %.3f while DAC %.3f\n",
+						xtrxll_get_name(dev->lldev),
 					   rel_freq / 1000, tx_dac_freq / 1000);
 			return -EINVAL;
 		}
@@ -1250,8 +1276,9 @@ int lms7nfe_bb_set_freq(struct xtrx_fe_obj* obj,
 		double rx_dac_freq = dev->cgen_clk / dev->rxcgen_div;
 		rel_freq = freq / rx_dac_freq;
 		if (rel_freq > 0.5 || rel_freq < -0.5) {
-			XTRXLL_LOG(XTRXLL_WARNING,
-					   "NCO RX ouf of range, requested %.3f (%.3f kHz) while ADC %.3f kHz\n",
+			XTRXLLS_LOG("LMSF", XTRXLL_WARNING,
+					   "%s: NCO RX ouf of range, requested %.3f (%.3f kHz) while ADC %.3f kHz\n",
+						xtrxll_get_name(dev->lldev),
 					   rel_freq, freq / 1000, rx_dac_freq / 1000);
 			return -EINVAL;
 		}
@@ -1281,8 +1308,8 @@ int lms7nfe_bb_set_freq(struct xtrx_fe_obj* obj,
 	if (res)
 		return res;
 
-	XTRXLL_LOG(XTRXLL_INFO, "NCO ch=%d type=%d freq=%.f\n",
-			   channel, type, freq);
+	XTRXLLS_LOG("LMSF", XTRXLL_INFO, "%s: NCO ch=%d type=%d freq=%.f\n",
+			   xtrxll_get_name(dev->lldev), channel, type, freq);
 
 	if (actualfreq)
 		*actualfreq = rel_freq;
@@ -1359,7 +1386,8 @@ int lms7nfe_set_gain(struct xtrx_fe_obj* obj,
 	if (res)
 		return res;
 
-	XTRXLL_LOG(XTRXLL_INFO, "Set gain %.1f to %d on %d channel\n", gain, gain_type, channel);
+	XTRXLLS_LOG("LMSF", XTRXLL_INFO, "%s: Set gain %.1f to %d on %d channel\n",
+				xtrxll_get_name(dev->lldev), gain, gain_type, channel);
 	res = lms7_mac_set(&dev->lms_state, ch);
 	if (res)
 		return res;
@@ -1431,7 +1459,8 @@ int lms7nfe_fe_set_freq(struct xtrx_fe_obj* obj,
 		lms7_sxx_disable(&dev->lms_state, true);
 	}
 
-	XTRXLL_LOG(XTRXLL_INFO, "FE_FREQ: rx=%d type=%d freq=%f ch=%d\n", rx, type, freq, channel);
+	XTRXLLS_LOG("LMSF", XTRXLL_INFO, "%s: FE_FREQ rx=%d type=%d freq=%f ch=%d\n",
+				xtrxll_get_name(dev->lldev), rx, type, freq, channel);
 
 	res = lms7_sxx_tune_sync(&dev->lms_state, rx, (unsigned)freq,
 							 type == XTRX_TUNE_TX_AND_RX_TDD);
