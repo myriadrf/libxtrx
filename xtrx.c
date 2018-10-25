@@ -780,7 +780,7 @@ int xtrx_run_ex(struct xtrx_dev* dev, const xtrx_run_params_t* params)
 				goto failed_fe;
 			}
 			XTRXLLS_LOG("XTRX", XTRXLL_INFO, "%s: RX ititialized to %d bytes paket size\n",
-						_devname(dev), rx_bpkt_size);
+						_devname(&dev[devnum]), rx_bpkt_size);
 			dev[devnum].rxinit = 1;
 		}
 
@@ -811,14 +811,14 @@ int xtrx_run_ex(struct xtrx_dev* dev, const xtrx_run_params_t* params)
 				}
 			} else {
 				XTRXLLS_LOG("XTRX", XTRXLL_ERROR, "%s: This RX host format is usnsupported for host filtering\n",
-							_devname(dev));
+							_devname(&dev[devnum]));
 				res = -EINVAL;
 				goto failed_fe;
 			}
 
 			if (res) {
 				XTRXLLS_LOG("XTRX", XTRXLL_ERROR, "%s: Unable to initialize host decimation/filtering err=%d\n",
-							_devname(dev), res);
+							_devname(&dev[devnum]), res);
 				goto filter_cleanup;
 			}
 		}
@@ -875,8 +875,9 @@ int xtrx_run_ex(struct xtrx_dev* dev, const xtrx_run_params_t* params)
 			dev[devnum].tx_pkt_samples = (MAX_TX_MSPS / tx_stream_count);
 
 		} else if (((dev[devnum].tx_pkt_samples * tx_stream_count)) > MAX_TX_MSPS ) {
-			XTRXLLS_LOG("XTRX", XTRXLL_WARNING, "hardware TX burst size is too high: PKT:%d, lowering to %d\n",
-					   dev[devnum].tx_pkt_samples, MAX_TX_MSPS / tx_stream_count);
+			XTRXLLS_LOG("XTRX", XTRXLL_WARNING, "%s: hardware TX burst size is too high: PKT:%d, lowering to %d\n",
+						_devname(&dev[devnum]),
+						dev[devnum].tx_pkt_samples, MAX_TX_MSPS / tx_stream_count);
 			//res = -EINVAL;
 			//goto failed_tx_init;
 
@@ -893,7 +894,7 @@ int xtrx_run_ex(struct xtrx_dev* dev, const xtrx_run_params_t* params)
 
 			if (params->tx_repeat_buf) {
 				XTRXLLS_LOG("XTRX", XTRXLL_ERROR, "%s: Host filtering doesn't work with repeat buffer\n",
-							_devname(dev));
+							_devname(&dev[devnum]));
 				res = -EINVAL;
 				goto failed_tx_init;
 			}
@@ -922,13 +923,13 @@ int xtrx_run_ex(struct xtrx_dev* dev, const xtrx_run_params_t* params)
 				}
 			} else {
 				XTRXLLS_LOG("XTRX", XTRXLL_ERROR, "%s: This TX host format is usnsupported for host filtering\n",
-							_devname(dev));
+							_devname(&dev[devnum]));
 				res = -EINVAL;
 				goto failed_tx_init;
 			}
 			if (res) {
 				XTRXLLS_LOG("XTRX", XTRXLL_ERROR, "%s: Unable to initialize host interpolation/filtering err=%d\n",
-							_devname(dev), res);
+							_devname(&dev[devnum]), res);
 			}
 		}
 
