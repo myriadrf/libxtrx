@@ -36,29 +36,8 @@
 
 #include <assert.h>
 #include <xtrxll_log.h>
+#include <stdbool.h>
 
-static int create_stream(const char* filename, int flags)
-{
-	int fd = open(filename, flags);
-	if (fd < 0) {
-		perror("Can't open file");
-		exit(EXIT_FAILURE);
-	}
-	return fd;
-}
-
-static int create_out_stream(const char* filename)
-{
-	int g_out_stream = create_stream(filename, O_WRONLY);
-	return g_out_stream;
-}
-#if 0
-static int create_in_stream(const char* filename)
-{
-	int g_in_stream = create_stream(filename, O_RDONLY);
-	return g_in_stream;
-}
-#endif
 static uint64_t grtime(void)
 {
 	struct timespec ts;
@@ -114,7 +93,7 @@ static void serialize_b12(uint64_t v, uint16_t* out)
 	*out++ = (v >> 24) << 4;
 	*out = (v >> 36) << 4;
 }
-
+#if 0
 static uint64_t deserialize_b12(const uint16_t* out)
 {
 	uint64_t v;
@@ -124,7 +103,7 @@ static uint64_t deserialize_b12(const uint16_t* out)
 	v |= (uint64_t)(*out++ >> 4) << 36;
 	return v;
 }
-
+#endif
 
 void* send_thread_func1(void* obj)
 {
@@ -209,6 +188,59 @@ void* send_thread_func1(void* obj)
 	return NULL;
 }
 
+enum {
+	BUF_TO_FLUSH = 32,
+	MAX_DEVS     = 8,
+};
+
+struct rx_flush_data {
+	void *buffer_ptr[MAX_DEVS*2][BUF_TO_FLUSH];
+	FILE *out_files[MAX_DEVS*2];
+
+	unsigned num_chans;
+	unsigned buf_ptr;
+	unsigned buf_max;
+
+	unsigned wr_sz;
+
+	bool stop;
+
+	sem_t sem_read_rx;
+	sem_t sem_read_wr;
+};
+
+void* thread_rx_to_file(void* obj)
+{
+	struct rx_flush_data *rxd = (struct rx_flush_data *)obj;
+	int res;
+	//unsigned long cnt = 0;
+
+	fprintf(stderr, "RX_TO_FILE: thread start\n");
+
+	for (;;) {
+		res = sem_wait(&rxd->sem_read_wr);
+		if (res) {
+			fprintf(stderr, "RX_TO_FILE: sem wait error!\n");
+			return 0;
+		}
+		if (rxd->stop) {
+			fprintf(stderr, "RX_TO_FILE: thread exit\n");
+			return 0;
+		}
+
+		for (unsigned i = 0; i <rxd->num_chans; i++) {
+			size_t ret = fwrite(rxd->buffer_ptr[i][rxd->buf_ptr], rxd->wr_sz, 1, rxd->out_files[i]);
+			if (ret != 1) {
+				fprintf(stderr, "RX_TO_FILE: write error %u != expected %u\n", (unsigned)ret, rxd->wr_sz);
+			}
+		}
+		sem_post(&rxd->sem_read_rx);
+		rxd->buf_ptr = (rxd->buf_ptr + 1) % rxd->buf_max;
+
+		//fprintf(stderr, "RX_TO_FILE: buffer %lu written\n", cnt++);
+	}
+}
+
 static const char* generate_getopt_string(const struct option *lo)
 {
 	static char mstr[500];
@@ -255,8 +287,6 @@ static void fill_hmft(int arg, unsigned *shs, xtrx_host_format_t *hf)
 int main(int argc, char** argv)
 {
 	struct xtrx_dev *dev;
-	//uint32_t result;
-	//uint32_t i;
 	int opt;
 	uint64_t st, tm = 0;
 	const char* device = NULL;
@@ -277,8 +307,6 @@ int main(int argc, char** argv)
 	xtrx_host_format_t tx_host_fmt = XTRX_IQ_INT16;
 	uint64_t samples = 16384;
 	unsigned rx_slice = samples;
-	int outstream;
-	//int outstreamb;
 	unsigned rx_sample_host_size = sizeof(float) * 2;
 	unsigned tx_sample_host_size = sizeof(float) * 2;
 
@@ -311,8 +339,9 @@ int main(int argc, char** argv)
 	unsigned logp = 0;
 	double master_in = 0;
 	int extclk = 0;
+	const char* out_name = NULL;
 	init_buf();
-
+	unsigned rx_bufs_cnt = 16;
 
 	struct option long_options[] = {
 	{"cycles",  required_argument, 0,   'C' },
@@ -328,7 +357,8 @@ int main(int argc, char** argv)
 	{"multdevs",required_argument, 0,   'd' },
 	{"device",  required_argument, 0,   'D' },
 	{"samples", required_argument,  0,   'N' },
-	{"out",     required_argument,  0,   'O' },
+	{"rx_bufs", required_argument,  0,   'n' },
+	{"out",     required_argument,  0,   'o' },
 	{"master",  required_argument,  0,   'y' },
 	{"vio",     required_argument,  0,   'Y' },
 	// symmetric for RX & TX
@@ -402,13 +432,9 @@ int main(int argc, char** argv)
 			}
 			break;
 		case 'N':	samples = atoll(optarg);		break;
-		case 'O':
-			outstream = create_out_stream(optarg);
-			if (outstream == -1) {
-				perror("Can't open out strem:");
-				exit(EXIT_FAILURE);
-			}
-			break;
+		case 'n':	rx_bufs_cnt = atoi(optarg); break;
+		case 'o':	out_name = optarg;			break;
+
 		case 'Z': tx_packet_size = atoi(optarg); break;
 		case 'z': rx_packet_size = atoi(optarg); break;
 
@@ -495,12 +521,20 @@ int main(int argc, char** argv)
 	}
 
 	xtrx_log_setlevel(loglevel, NULL);
+	if (rx_bufs_cnt > BUF_TO_FLUSH)
+		rx_bufs_cnt = BUF_TO_FLUSH;
+	else if (rx_bufs_cnt < 0)
+		rx_bufs_cnt = 1;
+	const bool flush_data = (out_name != NULL);
+	const unsigned buffer_count = (flush_data) ? BUF_TO_FLUSH : 1;
 
-	char* data = NULL;
+
+	//
+	// Open XTRX Device
+	//
 	unsigned dev_count;
 	int res;
 	if (multidev) {
-#define MAX_DEVS 32
 		if (device == NULL || strlen(device) < 1) {
 			// Do discovery
 			xtrx_device_info_t di[MAX_DEVS];
@@ -542,17 +576,71 @@ int main(int argc, char** argv)
 		goto falied_open;
 	}
 
-	char* data_bufs[MAX_DEVS];
 
-	data = (char*)malloc(rx_sample_host_size * samples * dev_count);
-	unsigned chunck_size = (rx_sample_host_size * samples);
-	if (mimomode)
-		chunck_size >>= 1;
+	//
+	// Initialize RX file output stream
+	//
+	pthread_t rx_write_thread;
+	struct rx_flush_data rxd;
+	char* out_buffs = NULL;
+	rxd.buf_max = buffer_count;
+	rxd.buf_ptr = 0;
+	rxd.num_chans = (dmarx) ? dev_count * (mimomode ? 2 : 1) : 0;
+	rxd.stop = false;
 
-	for (unsigned dc = 0; dc < ((mimomode) ? dev_count * 2 : dev_count); dc++) {
-		 data_bufs[dc] = data + dc * chunck_size;
+	sem_init(&rxd.sem_read_rx, 0, buffer_count);
+	sem_init(&rxd.sem_read_wr, 0, 0);
+
+	size_t rx_bufsize = buffer_count * dev_count * rx_sample_host_size * samples;
+	size_t rx_bufslice = rx_sample_host_size * samples;
+	if (mimomode) {
+		rx_bufslice >>= 1;
+	}
+	rxd.wr_sz = rx_bufslice;
+
+	if (dmarx) {
+		out_buffs = (char*)malloc(rx_bufsize);
+		if (out_buffs == NULL) {
+			fprintf(stderr, "Unable to create RX buffers (size=%.3fMB)\n",
+					(float)rx_bufsize / 1024 / 1024);
+			goto failed_rx;
+		}
+
+		char* bptr = out_buffs;
+		for (unsigned p = 0; p < rxd.num_chans; p++) {
+			char filename_buf[256];
+			const char* filename = (rxd.num_chans == 1) ? out_name : filename_buf;
+			if (rxd.num_chans > 1) {
+				snprintf(filename_buf, sizeof(filename_buf), "%s_%d",
+						 out_name, p);
+			}
+			if (flush_data) {
+				rxd.out_files[p] = fopen(filename, "wb");
+				if (rxd.out_files[p] == NULL) {
+					fprintf(stderr, "Unable to open file: %s! error: %d\n",
+							filename, errno);
+					exit(EXIT_FAILURE);
+				}
+			}
+
+			for (unsigned b = 0; b < rxd.buf_max; b++) {
+				rxd.buffer_ptr[p][b] = bptr;
+				bptr += rx_bufslice;
+			}
+		}
+
+		assert(bprt == out_buffs + rx_bufsize);
+		if (flush_data) {
+			res = pthread_create(&rx_write_thread, NULL, thread_rx_to_file, &rxd);
+			if (res) {
+				goto failed_rx;
+			}
+		}
 	}
 
+	//
+	// Set XTRX parameters
+	//
 	if (refclk || extclk) {
 		xtrx_set_ref_clk(dev, refclk, (extclk) ? XTRX_CLKSRC_EXT : XTRX_CLKSRC_INT);
 	}
@@ -613,7 +701,7 @@ int main(int argc, char** argv)
 		}
 		fprintf(stderr, "TX tunned: %f\n", txactualfreq);
 
-		if (rxfreq < 1000e6) {
+		if (txfreq < 1000e6) {
 			xtrx_set_antenna(dev, XTRX_TX_L);
 		} else {
 			xtrx_set_antenna(dev, XTRX_TX_W);
@@ -622,7 +710,6 @@ int main(int argc, char** argv)
 		res = xtrx_tune_tx_bandwidth(dev, ch, txbandwidth, &actual_txbandwidth);
 		if (res) {
 			fprintf(stderr, "Failed xtrx_tune_tx_bandwidth: %d\n", res);
-			//goto falied_tune;
 		}
 		fprintf(stderr, "TX bandwidth: %f\n", actual_txbandwidth);
 
@@ -671,18 +758,7 @@ int main(int argc, char** argv)
 		fprintf(stderr, "Failed xtrx_run: %d\n", res);
 		goto falied_tune;
 	}
-/*
-	res = xtrx_val_set(dev, XTRX_TRX, XTRX_CH_AB, XTRX_DSPFE_CMD, (0<<27) | 511);
-	if (res) {
-		fprintf(stderr, "Failed xtrx_val_set(XTRX_DSPFE_CMD): %d\n", res);
-		goto falied_tune;
-	}
-	res = xtrx_val_set(dev, XTRX_TRX, XTRX_CH_AB, XTRX_DSPFE_CMD, (1<<27) | (1<<16));
-	if (res) {
-		fprintf(stderr, "Failed xtrx_val_set(XTRX_DSPFE_CMD): %d\n", res);
-		goto falied_tune;
-	}
-*/
+
 	if (dmatx && dmarx) {
 		res = pthread_create(&sendthread, NULL, send_thread_func1, dev);
 		if (res) {
@@ -691,14 +767,21 @@ int main(int argc, char** argv)
 		}
 	}
 
+	//
+	// Streaming
+	//
+
+	uint64_t rx_processed = 0;
 	if (dmarx) {
 		void* stream_buffers[2 * MAX_DEVS];
-		unsigned buf_cnt = ((mimomode) ? dev_count * 2 : dev_count);
+		unsigned buf_cnt = rxd.num_chans;
 		uint64_t zero_inserted = 0;
 		int overruns = 0;
 
 		uint64_t sp = grtime();
 		uint64_t abpkt = sp;
+		unsigned binx = 0;
+
 		fprintf(stderr, "RX SAMPLES=%" PRIu64 " SLICE=%u PARTS=%" PRIu64 "\n", samples, rx_slice, samples / rx_slice);
 		st = grtime();
 		for (uint64_t p = 0; p < cycles; p++) {
@@ -711,8 +794,15 @@ int main(int argc, char** argv)
 				if (rem > rx_slice)
 					rem = rx_slice;
 
+				if (flush_data) {
+					res = sem_trywait(&rxd.sem_read_rx);
+					if (res) {
+						fprintf(stderr, "RX rate is too much; RX_TO_FILE thread is lagging behind\n");
+						goto falied_stop_rx;
+					}
+				}
 				for (unsigned bc = 0; bc < buf_cnt; bc++) {
-					stream_buffers[bc] = data_bufs[bc] + slize_off;
+					stream_buffers[bc] = rxd.buffer_ptr[bc][binx];
 				}
 
 				ri.samples = rem / ((mimomode) ? 2 : 1);
@@ -726,12 +816,19 @@ int main(int argc, char** argv)
 				sp = grtime();
 				uint64_t sb = sp - sa;
 
-				abpkt += 1e9 * ri.samples * ri.buffer_count / dev_count / actual_rxsample_rate / (rx_siso ? 1 : 2);
-				uint64_t dt = 0;
-				if (1) {
-					dt = deserialize_b12((const uint16_t*)((char*)data + 0x80));
+				if (flush_data) {
+					binx = (binx + 1) % rxd.buf_max;
+					res = sem_post(&rxd.sem_read_wr);
+					if (res) {
+						fprintf(stderr, "RX unable to post buffers!\n");
+						goto falied_stop_rx;
+					}
 				}
 
+				rx_processed += ri.out_samples * ((mimomode) ? 2 : 1);
+
+				abpkt += 1e9 * ri.samples * ri.buffer_count / dev_count / actual_rxsample_rate / (rx_siso ? 1 : 2);
+				uint64_t dt = 0;
 				if (logp == 0 || p % s_logp == 0)
 					fprintf(stderr, "PROCESSED RX SLICE %" PRIu64 " /%" PRIu64 ": res %d TS:%8" PRIu64 " %c%c  %6" PRId64 " us DELTA %6" PRId64 " us LATE %6" PRId64 " us"
 									" %d samples R=%16" PRIx64 " DELTA=%d\n",
@@ -755,6 +852,12 @@ falied_stop_rx:
 		tm = grtime() - st;
 		fprintf(stderr, "XXXXX Overruns:%d Zeros:%" PRIu64 "\n", overruns, zero_inserted);
 
+		if (flush_data) {
+			rxd.stop = true;
+			sem_post(&rxd.sem_read_wr);
+			pthread_join(rx_write_thread, NULL);
+		}
+#if 0
 		if (rx_sample_host_size == 4) {
 			uint16_t *d = (uint16_t*)data;
 			uint16_t vor[4] = {0,0,0,0};
@@ -786,6 +889,7 @@ falied_stop_rx:
 					vand[0], vand[1], vand[2], vand[3],
 					vor[0], vor[1], vor[2], vor[3]);
 		}
+#endif
 	} else if (dmatx && !dmarx) {
 		static char buf[32768*16];
 		int j;
@@ -871,8 +975,9 @@ falied_stop_tx:
 	unsigned rxchs = (rx_siso ? 1 : 2);
 	unsigned txchs = (tx_siso ? 1 : 2);
 
-	double rx_t = (dmarx) ? cycles*(double)samples*1000/tm : 0;
-	double rx_w = (dmarx) ? cycles*(double)(rx_wire_fmt+1)*samples*1000/tm : 0;
+	double rx_t = (dmarx) ? (double)rx_processed*1000/tm : 0;
+	double rx_w = (dmarx) ? (double)rx_processed*(rx_wire_fmt+1)*1000/tm : 0;
+
 	double tx_t = (dmatx) ? s_tx_cycles*(double)s_tx_slice*1000/s_tx_tm : 0;
 	double tx_w = (dmatx) ? s_tx_cycles*(double)s_tx_slice*(double)(tx_wire_fmt+1)*1000/s_tx_tm : 0;
 
@@ -881,24 +986,16 @@ falied_stop_tx:
 			rxchs, rx_t / rxchs, rx_t, rx_w,
 			txchs, tx_t / txchs, tx_t, tx_w);
 
-	if (outstream && dmarx) {
-		if (mimomode) {
-			//write(outstream, data, rx_sample_host_size * samples / 2);
-			//write(outstream, datab, rx_sample_host_size * samples / 2);
-		} else {
-			//write(outstream, data, rx_sample_host_size * samples);
-		}
-	}
-
 	xtrx_close(dev);
 	return 0;
 
-//falied_stop:
+
 	xtrx_stop(dev, XTRX_TRX);
 falied_tune:
 falied_samplerate:
+failed_rx:
 	xtrx_close(dev);
-	free(data);
+	free(out_buffs);
 falied_open:
 	return res;
 }
