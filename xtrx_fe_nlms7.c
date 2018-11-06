@@ -343,33 +343,48 @@ int lms7nfe_init(struct xtrxll_dev* lldev,
 	dev->rx_lo = 0;
 	dev->tx_lo = 0;
 
+
+	usleep(10000);
+
+	res = xtrxll_set_param(dev->lldev, XTRXLL_PARAM_FE_CTRL, PWR_CTRL_BUSONLY);
+	if (res) {
+		goto failed_lms7;
+	}
+
+	usleep(100000);
+
+	// Power on all LMS device and put it in reset
+	res = xtrxll_set_param(dev->lldev, XTRXLL_PARAM_FE_CTRL,
+						   XTRXLL_LMS7_GPWR_PIN);
+	if (res) {
+		goto failed_lms7;
+	}
+
+	usleep(100000);
+
 	res = xtrxll_set_param(dev->lldev, XTRXLL_PARAM_PWR_CTRL, PWR_CTRL_ON);
 	if (res) {
 		goto failed_lms7;
 	}
 
-	if (XTRX_O_RESET & flags) {
-		usleep(10000);
-		res = xtrxll_set_param(dev->lldev, XTRXLL_PARAM_FE_CTRL, 0);
-		if (res) {
-			goto failed_lms7;
-		}
-		usleep(10000);
-	}
+	usleep(10000);
 
-	// Power on all LMS device (but stay TX and RX turned off)
 	res = xtrxll_set_param(dev->lldev, XTRXLL_PARAM_FE_CTRL,
-							   XTRXLL_LMS7_GPWR_PIN | XTRXLL_LMS7_RESET_PIN |
-							   XTRXLL_LMS7_RXEN_PIN | XTRXLL_LMS7_TXEN_PIN);
+							   XTRXLL_LMS7_GPWR_PIN | XTRXLL_LMS7_RESET_PIN);
 	if (res) {
 		goto failed_lms7;
 	}
-	usleep(1000);
+
+	usleep(10000);
 
 	res = lms7_enable(&dev->lms_state);
 	if (res) {
 		goto failed_lms7;
 	}
+
+	res = xtrxll_set_param(dev->lldev, XTRXLL_PARAM_FE_CTRL,
+							   XTRXLL_LMS7_GPWR_PIN | XTRXLL_LMS7_RESET_PIN |
+							   XTRXLL_LMS7_RXEN_PIN | XTRXLL_LMS7_TXEN_PIN);
 
 	bparam_set_null(&dev->tx_bw[0]);
 	bparam_set_null(&dev->tx_bw[1]);
@@ -529,15 +544,18 @@ int lms7nfe_dd_set_samplerate(struct xtrx_fe_obj* obj,
 	double rxmaster_min = dacdiv * inrates->dac.hwrate;
 	cgen_rate = MAX(txmaster_min, rxmaster_min);
 
-	XTRXLLS_LOG("LMSF", XTRXLL_DEBUG, "%s: TXm = %.3f RXm = %.3f\n",
-			   xtrxll_get_name(dev->lldev), txmaster_min / 1e6, rxmaster_min / 1e6);
+	XTRXLLS_LOG("LMSF", XTRXLL_DEBUG, "%s: TXm = %.3f RXm = %.3f cgen_rate= %.3f\n",
+			   xtrxll_get_name(dev->lldev), txmaster_min / 1e6, rxmaster_min / 1e6, cgen_rate / 1e6);
 
 	// TODO: determine best possible combination of adcdiv / dacdiv, just
 	// for now we use fixed 4 divider for both
-	if (cgen_rate == 0) {
+	if (cgen_rate < 1) {
 		// If we activate host decimation or interpolation than we need more samplerate
 		cgen_rate = MAX((rx_no_decim ? 1 : 2) * rxrate * rx_host_div * adcdiv_fixed,
 						(tx_no_decim ? 1 : ((tx_gen) ? 2 : 4)) * txrate * tx_host_mul * dacdiv);
+
+		XTRXLLS_LOG("LMSF", XTRXLL_DEBUG, "%s: Initial CGEN set to %03.1f Mhz\n",
+					xtrxll_get_name(dev->lldev), cgen_rate / 1.0e6);
 
 		// For low sample rate increase DAC/ADC due to frequency aliasing
 		if ((rxrate > 1 && rxrate < 2e6) || (txrate > 1 && txrate < 2e6) || opt_decim_inter) {
@@ -548,8 +566,8 @@ int lms7nfe_dd_set_samplerate(struct xtrx_fe_obj* obj,
 				if (rx_ndiv > LMS7_DECIM_MAX || tx_ndiv > LMS7_INTER_MAX)
 					break;
 
-				XTRXLLS_LOG("LMSF", XTRXLL_INFO, "Increase RXdiv=%2d TXdiv=%2d => CGEN %03.1f Mhz\n",
-						   rx_ndiv, tx_ndiv, cgen_rate * 2 / 1.0e6);
+				XTRXLLS_LOG("LMSF", XTRXLL_INFO, "%s: Increase RXdiv=%2d TXdiv=%2d => CGEN %03.1f Mhz\n",
+						   xtrxll_get_name(dev->lldev), rx_ndiv, tx_ndiv, cgen_rate * 2 / 1.0e6);
 			}
 		}
 	}
