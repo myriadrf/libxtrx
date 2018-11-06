@@ -872,9 +872,9 @@ int main(int argc, char** argv)
 		goto falied_samplerate;
 	}
 	fprintf(stderr, "Master: %.3f MHz; RX rate: %.3f MHz; TX rate: %.3f MHz\n",
-			master / 1024 / 1024,
-			actual_rxsample_rate / 1024 / 1024,
-			actual_txsample_rate / 1024 / 1024);
+			master / 1e6,
+			actual_rxsample_rate / 1e6,
+			actual_txsample_rate / 1e6);
 
 	if (vio) {
 		xtrx_val_set(dev, XTRX_TRX, XTRX_CH_AB, XTRX_LMS7_VIO, vio);
