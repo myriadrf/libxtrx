@@ -477,7 +477,7 @@ int xtrx_set_samplerate(struct xtrx_dev* dev,
 
 	struct xtrx_fe_samplerate inrates, outrates;
 	memset(&inrates, 0, sizeof(inrates));
-	memset(&inrates, 0, sizeof(outrates));
+	memset(&outrates, 0, sizeof(outrates));
 
 	inrates.adc.rate = rxrate;
 	inrates.adc.hwrate = (rxrate > 0) ? cgen_rate / 4 : 0;
