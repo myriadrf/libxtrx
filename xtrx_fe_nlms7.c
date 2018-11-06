@@ -1396,7 +1396,7 @@ int lms7nfe_set_gain(struct xtrx_fe_obj* obj,
 	case XTRX_RX_LNA_GAIN:
 		gain = clamp(gain, 0, 30);
 		res = lms7_rfe_set_lna(&dev->lms_state, 30 - gain, &aret);
-		actual = aret;
+		actual = 30 - aret;
 		break;
 	case XTRX_RX_TIA_GAIN:
 		actual = gain;

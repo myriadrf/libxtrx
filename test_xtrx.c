@@ -49,144 +49,12 @@ static uint64_t grtime(void)
 double parse_val(const char* a)
 {
 	double z = atof(a);
-
 	return z;
 }
 
-static const int16_t testbuf[] =
-{ 0x0000, 0xffff,
-  0xaaaa, 0x5555,
-  0x0000, 0x0000,
-  0x0000, 0x0000,
-  0xffff, 0xffff,
-  0xffff, 0xffff,
-  0xaaaa, 0xaaaa,
-  0xaaaa, 0xaaaa};
 
-#define V(x) ((unsigned)(x) << 4)
-
-int16_t testbuf2[256];
-
-void init_buf()
-{
-	int i;
-	for (i = 0; i < 256; ++i) {
-		testbuf2[i] = V(i+1);
-	}
-}
-
-#define BUF testbuf2
-static volatile int s_stopflag = 0;
-static uint32_t s_tx_slice = 8192;
 static uint32_t s_tx_skip = 8192;
-static uint32_t s_tx_pause = 0;
-static int s_tx_siso = 0;
-static double s_actual_txsample_rate;
-static uint64_t s_tx_tm = 0;
-static uint64_t s_tx_cycles = 0;
 static unsigned s_logp = 0;
-
-static void serialize_b12(uint64_t v, uint16_t* out)
-{
-	*out++ = v << 4;
-	*out++ = (v >> 12) << 4;
-	*out++ = (v >> 24) << 4;
-	*out = (v >> 36) << 4;
-}
-#if 0
-static uint64_t deserialize_b12(const uint16_t* out)
-{
-	uint64_t v;
-	v = *out++ >> 4;
-	v |= (uint64_t)(*out++ >> 4) << 12;
-	v |= (uint64_t)(*out++ >> 4) << 24;
-	v |= (uint64_t)(*out++ >> 4) << 36;
-	return v;
-}
-#endif
-
-void* send_thread_func1(void* obj)
-{
-	static uint16_t buf[16384*16];
-	int j;
-	for (j = 0; j < (2*2*2*s_tx_slice)/64; j++) {
-		memcpy(&buf[64*j], testbuf2, 64*2);
-	}
-	// Fill remaining buffer with dead value
-	for (int k = j*64; k < 16384*8; k++) {
-		buf[k] = 0x1234; //V(66);
-	}
-
-
-	fprintf(stderr, "send_thread_func1 started!!!\n");
-	int res;
-	uint32_t ts = s_tx_skip; //2 * s_send_samples;
-	struct xtrx_dev *dev = (struct xtrx_dev *)obj;
-	xtrx_send_ex_info_t nfo;
-	const void *buffers[1] = { (void*)&buf[0] };
-
-	nfo.buffers = buffers;
-	nfo.buffer_count = 1;
-	nfo.flags = XTRX_TX_DONT_BUFFER;
-	nfo.samples = s_tx_slice;
-
-	uint64_t sp = grtime();
-	uint64_t abpkt = sp;
-	uint64_t st, tm;
-	st = sp;
-
-	uint64_t underruns = 0;
-	uint64_t p = 0;
-	uint64_t h = 0;
-
-	while (!s_stopflag) {
-		nfo.ts = ts;
-
-		uint64_t sa = grtime();
-		uint64_t da = sa - sp;
-
-		if (1) {
-			//((uint64_t*)buf)[0] = sa;
-			serialize_b12(sa, &buf[0]);
-		}
-
-		res = xtrx_send_sync_ex(dev, &nfo);
-		sp = grtime();
-		uint64_t sb = sp - sa;
-
-		//ts += nfo.out_samples * nfo.buffer_count / (s_tx_siso ? 1 : 2) + s_skip;
-		ts += nfo.samples * nfo.buffer_count / (s_tx_siso ? 1 : 2) + s_tx_pause;
-
-		abpkt += 1e9 * nfo.out_samples * nfo.buffer_count / s_actual_txsample_rate / (s_tx_siso ? 1 : 2);
-
-		if (s_logp == 0 || p % s_logp == 0)
-			fprintf(stderr, "PROCESSED TX SLICE %" PRIu64 "/%" PRIu64 ": res %d TS:%8" PRIu64 " %c%c  %6" PRId64 " us DELTA %6" PRId64 " us LATE %6" PRId64 " us"
-							" %d samples T=%16" PRIx64 "\n",
-					p, h, res, nfo.out_txlatets,
-					(nfo.out_flags & XTRX_TX_DISCARDED_TO)    ? 'D' : ' ',
-					' ',
-					sb / 1000, da / 1000, (int64_t)(sp - abpkt) / 1000, nfo.out_samples * nfo.buffer_count,
-					sa);
-		if (res) {
-			fprintf(stderr, "send_thread_func1: xtrx_send_burst_sync err %d\n", res);
-			return NULL;
-		}
-		if (nfo.out_flags) {
-			underruns ++;
-		}
-
-		p++;
-	}
-
-	tm = grtime() - st;
-	fprintf(stderr, "TX Underruns:%" PRIu64 "\n", underruns);
-
-	s_tx_cycles = p;
-	s_tx_tm = tm;
-
-	fprintf(stderr, "send_thread_func1 finished!!!\n");
-	return NULL;
-}
 
 enum {
 	BUF_TO_FLUSH = 32,
@@ -207,10 +75,67 @@ struct rx_flush_data {
 	unsigned get_cnt;
 
 	bool stop;
+	bool fiop;
 
 	sem_t sem_read_rx;
 	sem_t sem_read_wr;
 };
+
+char* alloc_flush_data_bufs(struct rx_flush_data *pd,
+							unsigned buffer_count,
+							unsigned num_chans,
+							unsigned slice_sz,
+							const char* tag,
+							const char* basename,
+							const char* fattr,
+							bool rd)
+{
+	pd->buf_max = buffer_count;
+	pd->buf_ptr = 0;
+	pd->num_chans = num_chans;
+	pd->stop = false;
+	pd->fiop = basename != NULL;
+	pd->put_cnt = 0;
+	pd->get_cnt = 0;
+	pd->wr_sz = slice_sz;
+	sem_init(&pd->sem_read_rx, 0, (rd) ? (buffer_count) : 0);
+	sem_init(&pd->sem_read_wr, 0, (!rd) ? (buffer_count) : 0);
+
+	size_t rx_bufsize  = num_chans * pd->buf_max * pd->wr_sz;
+	size_t rx_bufslice = pd->wr_sz;
+
+	char* out_buffs = (char*)malloc(rx_bufsize);
+	if (out_buffs == NULL) {
+		fprintf(stderr, "Unable to create %s buffers (size=%.3fMB)\n", tag,
+				(float)rx_bufsize / 1024 / 1024);
+		return NULL;
+	}
+
+	char* bptr = out_buffs;
+	for (unsigned p = 0; p < num_chans; p++) {
+		char filename_buf[256];
+		const char* filename = (num_chans == 1) ? basename : filename_buf;
+		if (num_chans > 1) {
+			snprintf(filename_buf, sizeof(filename_buf), "%s_%d",
+					 basename, p);
+		}
+		if (basename) {
+			pd->out_files[p] = fopen(filename, fattr);
+			if (pd->out_files[p] == NULL) {
+				fprintf(stderr, "Unable to open file: %s! error: %d\n",
+						filename, errno);
+				exit(EXIT_FAILURE);
+			}
+		}
+
+		for (unsigned b = 0; b < pd->buf_max; b++) {
+			pd->buffer_ptr[p][b] = bptr;
+			bptr += rx_bufslice;
+		}
+	}
+
+	return out_buffs;
+}
 
 void* thread_rx_to_file(void* obj)
 {
@@ -241,6 +166,47 @@ void* thread_rx_to_file(void* obj)
 
 		fprintf(stderr, "RX_TO_FILE: buffer %u written\n", rxd->get_cnt);
 		rxd->get_cnt++;
+	}
+}
+
+// Read file and flush into buffers
+void* thread_file_to_tx(void* obj)
+{
+	struct rx_flush_data *txd = (struct rx_flush_data *)obj;
+	int res;
+
+	fprintf(stderr, "FILE_TO_TX: thread start\n");
+
+	for (;;) {
+		res = sem_wait(&txd->sem_read_rx);
+		if (res) {
+			fprintf(stderr, "FILE_TO_TX: sem wait error!\n");
+			return 0;
+		}
+		if ((txd->put_cnt == txd->get_cnt) && txd->stop) {
+			fprintf(stderr, "FILE_TO_TX: thread exit: %d:%d\n", txd->put_cnt, txd->get_cnt);
+			return 0;
+		}
+
+		for (unsigned i = 0; i <txd->num_chans; i++) {
+			size_t ret = fread(txd->buffer_ptr[i][txd->buf_ptr], txd->wr_sz, 1, txd->out_files[i]);
+			if (ret != 1) {
+				fprintf(stderr, "FILE_TO_TX: read error %u != expected %u\n", (unsigned)ret, txd->wr_sz);
+
+				// Restart
+				fseek(txd->out_files[i], 0, SEEK_SET);
+				ret = fread(txd->buffer_ptr[i][txd->buf_ptr], txd->wr_sz, 1, txd->out_files[i]);
+				if (ret != 1) {
+					txd->stop = true;
+					return 0;
+				}
+			}
+		}
+		sem_post(&txd->sem_read_wr);
+		txd->buf_ptr = (txd->buf_ptr + 1) % txd->buf_max;
+
+		fprintf(stderr, "FILE_TO_TX: buffer %u written\n", txd->get_cnt);
+		txd->get_cnt++;
 	}
 }
 
@@ -311,7 +277,7 @@ struct stream_data {
 int stream_rx(struct stream_data* sdata,
 			  struct rx_flush_data* rxd)
 {
-	int res;
+	int res = 0;
 	void* stream_buffers[2 * MAX_DEVS];
 	unsigned buf_cnt = rxd->num_chans;
 	uint64_t zero_inserted = 0;
@@ -405,14 +371,133 @@ falied_stop_rx:
 	return res;
 }
 
+uint64_t s_tx_start_ts;
+bool s_tx_nodiscard;
+
+int stream_tx(struct stream_data* sdata,
+			  struct rx_flush_data* rxd)
+{
+	int res = 0;
+	const void* stream_buffers[2 * MAX_DEVS];
+	unsigned buf_cnt = rxd->num_chans;
+	int underruns = 0;
+	uint64_t sp = grtime();
+	uint64_t tx_processed = 0;
+	uint64_t st = sp;
+	uint64_t abpkt = sp;
+	unsigned binx = 0;
+	unsigned dev_count = rxd->num_chans / (sdata->mux_demux ? 2 : 1);
+	uint64_t tx_sent_samples = s_tx_start_ts;
+
+	fprintf(stderr, "TX CYCLES=%" PRIu64 " SAMPLES=%" PRIu64 " SLICE=%u (PARTS=%" PRIu64 ")\n",
+			sdata->cycles,
+			sdata->samples_per_cyc, sdata->slice_sz,
+			sdata->samples_per_cyc / sdata->slice_sz);
+
+	for (uint64_t p = 0; p < sdata->cycles; p++) {
+		// Get new buffer to writing to
+		if (sdata->flush_data) {
+			res = sem_trywait(&rxd->sem_read_wr);
+			if (res) {
+				fprintf(stderr, "TX rate is too much; FILE_TO_TX thread is lagging behind\n");
+				goto falied_stop_tx;
+			}
+		}
+
+		for (unsigned bc = 0; bc < buf_cnt; bc++) {
+			stream_buffers[bc] = rxd->buffer_ptr[bc][binx];
+		}
+
+		for (uint64_t h = 0; h < sdata->samples_per_cyc / sdata->slice_sz; h++) {
+			size_t rem = sdata->samples_per_cyc - h * sdata->slice_sz;
+			if (rem > sdata->slice_sz)
+				rem = sdata->slice_sz;
+
+			xtrx_send_ex_info_t nfo;
+			nfo.samples = rem / ((sdata->mux_demux) ? 2 : 1);
+			nfo.flags = XTRX_TX_DONT_BUFFER;
+			if (s_tx_nodiscard)
+				nfo.flags |= XTRX_TX_NO_DISCARD;
+			nfo.ts = tx_sent_samples;
+			nfo.buffers = (const void* const*)stream_buffers;
+			nfo.buffer_count = buf_cnt;
+			nfo.timeout = 0;
+			nfo.out_txlatets = 0;
+
+			uint64_t sa = grtime();
+			uint64_t da = sa - sp;
+			res = xtrx_send_sync_ex(sdata->dev, &nfo);
+			sp = grtime();
+			uint64_t sb = sp - sa;
+
+			abpkt += 1e9 * nfo.samples * nfo.buffer_count / dev_count / sdata->ramplerate / (sdata->siso ? 1 : 2);
+			if (s_logp == 0 || p % s_logp == 0) {
+				fprintf(stderr, "PROCESSED TX SLICE %" PRIu64 "/%" PRIu64 ":"
+								" res %d TS:%8" PRIu64 " %c%c  %6" PRId64 " us"
+								" DELTA %6" PRId64 " us LATE %6" PRId64 " us  %d x %d samples (%d)\n",
+								p, h, res, nfo.out_txlatets,
+								(nfo.out_flags & XTRX_TX_DISCARDED_TO)    ? 'D' : ' ',
+								' ',
+								sb / 1000, da / 1000, (int64_t)(sp - abpkt) / 1000, nfo.out_samples, nfo.buffer_count, nfo.samples);
+			}
+			if (res) {
+				fprintf(stderr, "Failed xtrx_recv_sync: %d\n", res);
+				goto falied_stop_tx;
+			}
+
+			for (unsigned bc = 0; bc < buf_cnt; bc++) {
+				stream_buffers[bc] += nfo.samples * sdata->sample_host_size;
+			}
+			if (nfo.out_flags) {
+				underruns++;
+			}
+			tx_processed += nfo.out_samples * ((sdata->mux_demux) ? 2 : 1);
+			tx_sent_samples += nfo.samples * (nfo.buffer_count / dev_count) / (sdata->siso ? 1 : 2);
+		}
+
+		if (sdata->flush_data) {
+			binx = (binx + 1) % rxd->buf_max;
+			rxd->put_cnt++;
+
+			res = sem_post(&rxd->sem_read_rx);
+			if (res) {
+				fprintf(stderr, "TX unable to post buffers!\n");
+				goto falied_stop_tx;
+			}
+		}
+	}
+
+falied_stop_tx:
+	sdata->out_overruns = underruns;
+	sdata->out_samples_per_dev = tx_processed;
+	sdata->out_tm_diff = grtime() - st;
+	return res;
+}
+
+void parse_rxgain(const char* fmt, int *lna, int *pga, int *tia)
+{
+	int res;
+	res = sscanf(fmt, "%d:%d:%d", lna, pga, tia);
+	if (res == 3)
+		return;
+
+	*tia = 9;
+	res = sscanf(fmt, "%d:%d", lna, pga);
+	if (res == 2)
+		return;
+
+	*pga = 0;
+	*lna = atoi(fmt);
+}
+
 int main(int argc, char** argv)
 {
 	struct xtrx_dev *dev;
 	int opt;
-	uint64_t st, tm = 0;
+	uint64_t rx_tm = 0;
+	uint64_t tx_tm = 0;
 	const char* device = NULL;
 
-	pthread_t sendthread;
 	int multidev = 0;
 	double rxsamplerate = 4.0e6, actual_rxsample_rate = 0;
 	double txsamplerate = 4.0e6, actual_txsample_rate = 0;
@@ -420,7 +505,7 @@ int main(int argc, char** argv)
 	double txfreq = 450e6, txactualfreq = 0;
 	double rxbandwidth = 2e6, actual_rxbandwidth = 0;
 	double txbandwidth = 2e6, actual_txbandwidth = 0;
-	double lnagain = 15, actuallnagain = 0;
+	double actuallnagain = 0;
 	xtrx_channel_t ch = XTRX_CH_ALL;
 	xtrx_wire_format_t rx_wire_fmt = XTRX_WF_16;
 	xtrx_host_format_t rx_host_fmt = XTRX_IQ_INT16;
@@ -428,6 +513,7 @@ int main(int argc, char** argv)
 	xtrx_host_format_t tx_host_fmt = XTRX_IQ_INT16;
 	uint64_t samples = 16384;
 	unsigned rx_slice = samples;
+	unsigned tx_slice = samples;
 	unsigned rx_sample_host_size = sizeof(float) * 2;
 	unsigned tx_sample_host_size = sizeof(float) * 2;
 
@@ -456,13 +542,18 @@ int main(int argc, char** argv)
 	unsigned samples_flag = 0;
 	unsigned refclk = 0;
 	unsigned cycles = 1;
-	unsigned rx_skip = 0;
+	unsigned rx_skip = 8192;
+	unsigned tx_skip = 8192;
 	unsigned logp = 0;
 	double master_in = 0;
 	int extclk = 0;
 	const char* out_name = NULL;
-	init_buf();
-	unsigned rx_bufs_cnt = 16;
+	const char* in_name = NULL;
+	unsigned bufs_cnt = 16;
+	int txgain = 0;
+	int rxgain_lna = 15;
+	int rxgain_pga = 0;
+	int rxgain_tia = 9;
 
 	struct option long_options[] = {
 	{"cycles",  required_argument, 0,   'C' },
@@ -480,6 +571,7 @@ int main(int argc, char** argv)
 	{"samples", required_argument,  0,   'N' },
 	{"rx_bufs", required_argument,  0,   'n' },
 	{"out",     required_argument,  0,   'o' },
+	{"in",     required_argument,  0,   'O' },
 	{"master",  required_argument,  0,   'y' },
 	{"vio",     required_argument,  0,   'Y' },
 	// symmetric for RX & TX
@@ -510,6 +602,9 @@ int main(int argc, char** argv)
 	{"rxtsta",  no_argument,        0,   'a' },
 	{"txtsta",  no_argument,        0,   'A' },
 	{"txnodis", no_argument,        0,   'U' },
+	{"samples", required_argument,  0,   'u' },
+	{"rxgain",  required_argument,  0,   'g' },
+	{"txgain",  required_argument,  0,   'G' },
 	{0,         0,                  0,    0  }
 };
 
@@ -536,12 +631,12 @@ int main(int argc, char** argv)
 		case 'c':	refclk = atoi(optarg);		break;
 
 		case 'p': samples_flag = atoi(optarg);	break;
-		case 'P':	loopback = 1;				break;
-		case 'R':	tx_repeat_mode = 1;			break;
+		case 'P': loopback = 1;					break;
+		case 'R': tx_repeat_mode = 1;			break;
 		case 'r': rxlfsr = 1;					break;
-		case 'M':	mimomode = 1;				break;
-		case 'm':	extclk = 1;					break;
-		case 'l':	loglevel = (atoi(optarg));	break;
+		case 'M': mimomode = 1;					break;
+		case 'm': extclk = 1;					break;
+		case 'l': loglevel = (atoi(optarg));	break;
 		case 'L': logp = (atoi(optarg));		break;
 		case 'd': multidev = 1; device = optarg;break;
 		case 'D': device = optarg;				break;
@@ -552,18 +647,20 @@ int main(int argc, char** argv)
 			default: rx_wire_fmt = XTRX_WF_16; break;
 			}
 			break;
-		case 'N':	samples = atoll(optarg);		break;
-		case 'n':	rx_bufs_cnt = atoi(optarg); break;
-		case 'o':	out_name = optarg;			break;
+		case 'N': samples = atoll(optarg);	break;
+		case 'n': bufs_cnt = atoi(optarg); break;
+
+		case 'o': out_name = optarg;			break;
+		case 'O': in_name = optarg;				break;
 
 		case 'Z': tx_packet_size = atoi(optarg); break;
 		case 'z': rx_packet_size = atoi(optarg); break;
 
-		case 'K':	s_tx_skip = atoi(optarg);		break;
-		case 'k':	rx_skip = atoi(optarg);		break;
+		case 'K': tx_skip = atoi(optarg);		break;
+		case 'k': rx_skip = atoi(optarg);		break;
 
-		case 'E':	s_tx_slice = atoi(optarg);	break;
-		case 'e': rx_slice = atoi(optarg);	break;
+		case 'E': tx_slice = atoi(optarg);	break;
+		case 'e': rx_slice = atoi(optarg);		break;
 
 			// symmetric flags for TX & RX
 		case 'h':
@@ -597,9 +694,13 @@ int main(int argc, char** argv)
 		case 't':	dmarx = 1;					break;
 		case 'T':	dmatx = 1;					break;
 
+		case 'g': parse_rxgain(optarg, &rxgain_lna, &rxgain_pga, &rxgain_tia); break;
+		case 'G': txgain = atoi(optarg);	break;
+
 		case 'y': master_in = atof(optarg); break;
 		case 'Y': vio = atoi(optarg); break;
 
+		case 'u': samples = atoll(optarg); break;
 		case 'U': tx_nodiscard = 1; break;
 		default: /* '?' */
 			fprintf(stderr, "Usage: %s <options>\n", argv[0]);
@@ -611,8 +712,11 @@ int main(int argc, char** argv)
 	if (samples < rx_slice) {
 		rx_slice = samples;
 	}
+	if (samples < tx_slice) {
+		tx_slice = samples;
+	}
 
-	s_tx_siso = tx_siso;
+	s_tx_skip = tx_skip;
 	s_logp = logp;
 
 	if (dmarx == 0 && dmatx == 0 && tx_repeat_mode == 0) {
@@ -642,12 +746,15 @@ int main(int argc, char** argv)
 	}
 
 	xtrx_log_setlevel(loglevel, NULL);
-	if (rx_bufs_cnt > BUF_TO_FLUSH)
-		rx_bufs_cnt = BUF_TO_FLUSH;
-	else if (rx_bufs_cnt < 0)
-		rx_bufs_cnt = 1;
-	const bool flush_data = (out_name != NULL);
-	const unsigned buffer_count = (flush_data) ? BUF_TO_FLUSH : 1;
+	if (bufs_cnt > BUF_TO_FLUSH)
+		bufs_cnt = BUF_TO_FLUSH;
+	else if (bufs_cnt <= 0)
+		bufs_cnt = 1;
+
+	const bool rx_flush_data = (out_name != NULL);
+	const unsigned rx_buffer_count = (rx_flush_data) ? bufs_cnt : 1;
+	const bool tx_flush_data = (in_name != NULL);
+	const unsigned tx_buffer_count = (tx_flush_data) ? bufs_cnt : 1;
 
 
 	//
@@ -697,66 +804,55 @@ int main(int argc, char** argv)
 		goto falied_open;
 	}
 
-
 	//
 	// Initialize RX file output stream
 	//
 	pthread_t rx_write_thread;
 	struct rx_flush_data rxd;
 	char* out_buffs = NULL;
-	rxd.buf_max = buffer_count;
-	rxd.buf_ptr = 0;
-	rxd.num_chans = (dmarx) ? dev_count * (mimomode ? 2 : 1) : 0;
-	rxd.stop = false;
-	rxd.put_cnt = 0;
-	rxd.get_cnt = 0;
-
-	sem_init(&rxd.sem_read_rx, 0, buffer_count);
-	sem_init(&rxd.sem_read_wr, 0, 0);
-
-	size_t rx_bufsize = buffer_count * dev_count * rx_sample_host_size * samples;
-	size_t rx_bufslice = rx_sample_host_size * samples;
-	if (mimomode) {
-		rx_bufslice >>= 1;
-	}
-	rxd.wr_sz = rx_bufslice;
-
 	if (dmarx) {
-		out_buffs = (char*)malloc(rx_bufsize);
+		out_buffs = alloc_flush_data_bufs(&rxd,
+										  rx_buffer_count,
+										  dev_count * (mimomode ? 2 : 1),
+										  rx_sample_host_size * samples / (mimomode ? 2 : 1),
+										  "RX",
+										  out_name,
+										  "wb",
+										  true);
 		if (out_buffs == NULL) {
-			fprintf(stderr, "Unable to create RX buffers (size=%.3fMB)\n",
-					(float)rx_bufsize / 1024 / 1024);
 			goto failed_rx;
 		}
-
-		char* bptr = out_buffs;
-		for (unsigned p = 0; p < rxd.num_chans; p++) {
-			char filename_buf[256];
-			const char* filename = (rxd.num_chans == 1) ? out_name : filename_buf;
-			if (rxd.num_chans > 1) {
-				snprintf(filename_buf, sizeof(filename_buf), "%s_%d",
-						 out_name, p);
-			}
-			if (flush_data) {
-				rxd.out_files[p] = fopen(filename, "wb");
-				if (rxd.out_files[p] == NULL) {
-					fprintf(stderr, "Unable to open file: %s! error: %d\n",
-							filename, errno);
-					exit(EXIT_FAILURE);
-				}
-			}
-
-			for (unsigned b = 0; b < rxd.buf_max; b++) {
-				rxd.buffer_ptr[p][b] = bptr;
-				bptr += rx_bufslice;
-			}
-		}
-
-		assert(bptr == out_buffs + rx_bufsize);
-		if (flush_data) {
+		if (rx_flush_data) {
 			res = pthread_create(&rx_write_thread, NULL, thread_rx_to_file, &rxd);
 			if (res) {
 				goto failed_rx;
+			}
+		}
+	}
+
+	//
+	// Initialize TX file input stream
+	//
+	pthread_t tx_read_thread;
+	struct rx_flush_data txd;
+	char* in_buffs = NULL;
+	if (dmatx) {
+		in_buffs = alloc_flush_data_bufs(&txd,
+										 tx_buffer_count,
+										 dev_count * (mimomode ? 2 : 1),
+										 tx_sample_host_size * samples / (mimomode ? 2 : 1),
+										 "TX",
+										 in_name,
+										 "rb",
+										 false);
+
+		if (in_buffs == NULL) {
+			goto failed_tx;
+		}
+		if (tx_flush_data) {
+			res = pthread_create(&tx_read_thread, NULL, thread_file_to_tx, &txd);
+			if (res) {
+				goto failed_tx;
 			}
 		}
 	}
@@ -779,8 +875,6 @@ int main(int argc, char** argv)
 			master / 1024 / 1024,
 			actual_rxsample_rate / 1024 / 1024,
 			actual_txsample_rate / 1024 / 1024);
-
-	s_actual_txsample_rate = actual_txsample_rate;
 
 	if (vio) {
 		xtrx_val_set(dev, XTRX_TRX, XTRX_CH_AB, XTRX_LMS7_VIO, vio);
@@ -809,12 +903,27 @@ int main(int argc, char** argv)
 		}
 		fprintf(stderr, "RX bandwidth: %f\n", actual_rxbandwidth);
 
-		res = xtrx_set_gain(dev, ch, XTRX_RX_LNA_GAIN, lnagain, &actuallnagain);
+
+		res = xtrx_set_gain(dev, ch, XTRX_RX_LNA_GAIN, rxgain_lna, &actuallnagain);
 		if (res) {
-			fprintf(stderr, "Failed xtrx_set_gain: %d\n", res);
+			fprintf(stderr, "Failed xtrx_set_gain(LNA): %d\n", res);
 			goto falied_tune;
 		}
 		fprintf(stderr, "RX LNA gain: %f\n", actuallnagain);
+
+		res = xtrx_set_gain(dev, ch, XTRX_RX_PGA_GAIN, rxgain_pga, &actuallnagain);
+		if (res) {
+			fprintf(stderr, "Failed xtrx_set_gain(PGA): %d\n", res);
+			goto falied_tune;
+		}
+		fprintf(stderr, "RX PGA gain: %f\n", actuallnagain);
+
+		res = xtrx_set_gain(dev, ch, XTRX_RX_TIA_GAIN, rxgain_tia, &actuallnagain);
+		if (res) {
+			fprintf(stderr, "Failed xtrx_set_gain(TIA): %d\n", res);
+			goto falied_tune;
+		}
+		fprintf(stderr, "RX TIA gain: %f\n", actuallnagain);
 	}
 
 	int do_tx_rf = (dmatx || tx_repeat_mode) && !loopback;
@@ -838,8 +947,16 @@ int main(int argc, char** argv)
 		}
 		fprintf(stderr, "TX bandwidth: %f\n", actual_txbandwidth);
 
-		// TODO set GAIN
+		res = xtrx_set_gain(dev, ch, XTRX_TX_PAD_GAIN, txgain, &actuallnagain);
+		if (res) {
+			fprintf(stderr, "Failed xtrx_set_gain(PAD): %d\n", res);
+			goto falied_tune;
+		}
+		fprintf(stderr, "TX PAD gain: %f\n", actuallnagain);
 	}
+
+	s_tx_start_ts = s_tx_skip / (tx_siso ? 1 : 2);
+	s_tx_nodiscard = tx_nodiscard;
 
 	xtrx_stop(dev, XTRX_TRX);
 	xtrx_stop(dev, XTRX_TRX);
@@ -874,9 +991,9 @@ int main(int argc, char** argv)
 			(tx_siso     ? XTRX_RSP_SISO_MODE     : 0) |
 			(tx_swap_ab  ? XTRX_RSP_SWAP_AB       : 0) |
 			(tx_swap_iq  ? XTRX_RSP_SWAP_IQ       : 0);
-	params.tx.paketsize = (tx_repeat_mode) ? (sizeof(BUF)/2) : tx_packet_size / ((tx_siso) ? 1 : 2);
+	params.tx.paketsize = tx_packet_size / ((tx_siso) ? 1 : 2);
 	params.rx_stream_start = rx_skip;
-	params.tx_repeat_buf = (tx_repeat_mode) ? BUF : NULL;
+	params.tx_repeat_buf = NULL; //(tx_repeat_mode) ? BUF : NULL;
 
 	res = xtrx_run_ex(dev, &params);
 	if (res) {
@@ -884,118 +1001,62 @@ int main(int argc, char** argv)
 		goto falied_tune;
 	}
 
-	if (dmatx && dmarx) {
-		res = pthread_create(&sendthread, NULL, send_thread_func1, dev);
-		if (res) {
-			fprintf(stderr, "Failed start TX thread: %d\n", res);
-			goto falied_tune;
-		}
-	}
-
 	//
 	// Streaming
 	//
 	uint64_t rx_processed = 0;
+	struct stream_data sd_rx;
+	sd_rx.dev = dev;
+	sd_rx.cycles = cycles;
+	sd_rx.samples_per_cyc = samples;
+	sd_rx.slice_sz = rx_slice;
+	sd_rx.ramplerate = actual_rxsample_rate;
+	sd_rx.mux_demux = mimomode;
+	sd_rx.siso = rx_siso;
+	sd_rx.flush_data = rx_flush_data;
+	sd_rx.sample_host_size = rx_sample_host_size;
+
+	uint64_t tx_processed = 0;
+	struct stream_data sd_tx;
+	sd_tx.dev = dev;
+	sd_tx.cycles = cycles;
+	sd_tx.samples_per_cyc = samples;
+	sd_tx.slice_sz = tx_slice;
+	sd_tx.ramplerate = actual_txsample_rate;
+	sd_tx.mux_demux = mimomode;
+	sd_tx.siso = tx_siso;
+	sd_tx.flush_data = tx_flush_data;
+	sd_tx.sample_host_size = tx_sample_host_size;
+
 	if (dmarx) {
-		struct stream_data sd;
-		sd.dev = dev;
-		sd.cycles = cycles;
-		sd.samples_per_cyc = samples;
-		sd.slice_sz = rx_slice;
-		sd.ramplerate = actual_rxsample_rate;
-		sd.mux_demux = mimomode;
-		sd.siso = rx_siso;
-		sd.flush_data = flush_data;
-		sd.sample_host_size = rx_sample_host_size;
+		stream_rx(&sd_rx, &rxd);
+		rx_tm = sd_rx.out_tm_diff;
+		rx_processed = sd_rx.out_samples_per_dev;
 
-		stream_rx(&sd, &rxd);
+		fprintf(stderr, "RX STAT Overruns:%d\n", sd_rx.out_overruns);
 
-		tm = sd.out_tm_diff;
-		rx_processed = sd.out_samples_per_dev;
-
-		fprintf(stderr, "RX STAT Overruns:%d\n", sd.out_overruns);
-
-		if (flush_data) {
+		if (rx_flush_data) {
 			rxd.stop = true;
 			sem_post(&rxd.sem_read_wr);
 			pthread_join(rx_write_thread, NULL);
 		}
 	} else if (dmatx && !dmarx) {
-		static char buf[32768*16];
-		int j;
-		for (j = 0; j < (sizeof(buf))/(sizeof(testbuf2)); j++) {
-			memcpy(&buf[sizeof(testbuf2)*j], testbuf2, sizeof(testbuf2));
+		stream_tx(&sd_tx, &txd);
+		tx_tm = sd_tx.out_tm_diff;
+		tx_processed = sd_tx.out_samples_per_dev;
+
+		fprintf(stderr, "TX STAT Underruns:%d\n", sd_tx.out_overruns);
+
+		if (tx_flush_data) {
+			txd.stop = true;
+			sem_post(&txd.sem_read_rx);
+			pthread_join(tx_read_thread, NULL);
 		}
+	} else if (dmatx && dmarx) {
+		// TODO TX & RX
 
-		void* stream_buffers[2 * MAX_DEVS];
-		unsigned buf_cnt = ((mimomode) ? dev_count * 2 : dev_count);
-		for (unsigned p = 0; p < buf_cnt; p++) {
-			stream_buffers[p] = (void*)&buf[0];
-		}
-
-		uint64_t underruns = 0;
-		uint64_t tx_start_ts = s_tx_skip / (tx_siso ? 1 : 2);
-		uint64_t tx_sent_samples = 0; //samples in one HW stream
-
-		uint64_t sp = grtime();
-		uint64_t abpkt = sp;
-		uint64_t p;
-		fprintf(stderr, "TX SAMPLES=%" PRIu64 " SLICE=%u PARTS=%" PRIu64 "\n", samples, s_tx_slice, samples / s_tx_slice);
-		st = grtime();
-		for (p = 0; p < cycles; p++) {
-			for (uint64_t h = 0; h < samples / s_tx_slice; h++) {
-				size_t rem = samples - h * s_tx_slice;
-				if (rem > s_tx_slice)
-					rem = s_tx_slice;
-
-				xtrx_send_ex_info_t nfo;
-				nfo.samples = rem / ((mimomode) ? 2 : 1);
-				nfo.flags = XTRX_TX_DONT_BUFFER;
-				if (tx_nodiscard)
-					nfo.flags |= XTRX_TX_NO_DISCARD;
-				nfo.ts = tx_start_ts + tx_sent_samples;
-				nfo.buffers = (const void* const*)stream_buffers;
-				nfo.buffer_count = buf_cnt;
-				nfo.timeout = 0;
-
-				uint64_t sa = grtime();
-				uint64_t da = sa - sp;
-				res = xtrx_send_sync_ex(dev, &nfo);
-				sp = grtime();
-				uint64_t sb = sp - sa;
-
-				abpkt += 1e9 * nfo.samples * nfo.buffer_count / dev_count / actual_txsample_rate / (tx_siso ? 1 : 2);
-
-				if (logp == 0 || p % s_logp == 0)
-					fprintf(stderr, "PROCESSED TX SLICE %" PRIu64 "/%" PRIu64 ": res %d TS:%8" PRIu64 " %c%c  %6" PRId64 " us DELTA %6" PRId64 " us LATE %6" PRId64 " us  %d x %d samples\n",
-							p, h, res, nfo.out_txlatets,
-							(nfo.out_flags & XTRX_TX_DISCARDED_TO)    ? 'D' : ' ',
-							' ',
-							sb / 1000, da / 1000, (int64_t)(sp - abpkt) / 1000, nfo.out_samples, nfo.buffer_count);
-				if (res) {
-					fprintf(stderr, "Failed xtrx_send_sync_ex: %d\n", res);
-					goto falied_stop_tx;
-				}
-
-				tx_sent_samples += nfo.samples * (nfo.buffer_count / dev_count) / (tx_siso ? 1 : 2);
-				if (nfo.out_flags) {
-					underruns ++;
-				}
-			}
-		}
-falied_stop_tx:
-		tm = grtime() - st;
-
-		s_tx_cycles = p * (samples / s_tx_slice);
-		s_tx_tm = tm;
-		fprintf(stderr, "TX Underruns:%" PRIu64 "\n", underruns);
+		abort();
 	}
-
-	s_stopflag = 1;
-	if (dmatx && dmarx) {
-		pthread_join(sendthread, NULL);
-	}
-
 
 	xtrx_stop(dev, dir);
 	xtrx_stop(dev, dir);
@@ -1005,11 +1066,11 @@ falied_stop_tx:
 	unsigned rxchs = (rx_siso ? 1 : 2);
 	unsigned txchs = (tx_siso ? 1 : 2);
 
-	double rx_t = (dmarx) ? (double)rx_processed*1000/tm : 0;
-	double rx_w = (dmarx) ? (double)rx_processed*(rx_wire_fmt+1)*1000/tm : 0;
+	double rx_t = (dmarx) ? (double)rx_processed*1000/rx_tm : 0;
+	double rx_w = (dmarx) ? (double)rx_processed*(rx_wire_fmt+1)*1000/rx_tm : 0;
 
-	double tx_t = (dmatx) ? s_tx_cycles*(double)s_tx_slice*1000/s_tx_tm : 0;
-	double tx_w = (dmatx) ? s_tx_cycles*(double)s_tx_slice*(double)(tx_wire_fmt+1)*1000/s_tx_tm : 0;
+	double tx_t = (dmatx) ? (double)tx_processed*1000/tx_tm : 0;
+	double tx_w = (dmatx) ? (double)tx_processed*(tx_wire_fmt+1)*1000/tx_tm : 0;
 
 	fprintf(stderr, "Processed %d devs, each: RX %d x %.3f = %.3f MSPS (WIRE: %f)    TX %d x %.3f = %.3f MSPS (WIRE: %f MB/s) \n",
 			dev_count,
@@ -1024,6 +1085,7 @@ falied_stop_tx:
 falied_tune:
 falied_samplerate:
 failed_rx:
+failed_tx:
 	xtrx_close(dev);
 	free(out_buffs);
 falied_open:
