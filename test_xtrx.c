@@ -282,7 +282,7 @@ int stream_rx(struct stream_data* sdata,
 	unsigned buf_cnt = rxd->num_chans;
 	uint64_t zero_inserted = 0;
 	int overruns = 0;
-	uint64_t rx_processed;
+	uint64_t rx_processed = 0;
 	uint64_t sp = grtime();
 
 	uint64_t st = sp;
@@ -554,6 +554,8 @@ int main(int argc, char** argv)
 	int rxgain_lna = 15;
 	int rxgain_pga = 0;
 	int rxgain_tia = 9;
+	int gtime = 0;
+	int gmode = 0;
 
 	struct option long_options[] = {
 	{"cycles",  required_argument, 0,   'C' },
@@ -605,6 +607,8 @@ int main(int argc, char** argv)
 	{"samples", required_argument,  0,   'u' },
 	{"rxgain",  required_argument,  0,   'g' },
 	{"txgain",  required_argument,  0,   'G' },
+	{"gtime",   required_argument,  0,   'j' },
+	{"gmode",   required_argument,  0,   'J' },
 	{0,         0,                  0,    0  }
 };
 
@@ -702,6 +706,9 @@ int main(int argc, char** argv)
 
 		case 'u': samples = atoll(optarg); break;
 		case 'U': tx_nodiscard = 1; break;
+
+		case 'j':	gtime = parse_val(optarg);	break;
+		case 'J':	gmode = parse_val(optarg);	break;
 		default: /* '?' */
 			fprintf(stderr, "Usage: %s <options>\n", argv[0]);
 			generate_help(long_options);
@@ -877,7 +884,7 @@ int main(int argc, char** argv)
 			actual_txsample_rate / 1e6);
 
 	if (vio) {
-		xtrx_val_set(dev, XTRX_TRX, XTRX_CH_AB, XTRX_LMS7_VIO, vio);
+		xtrx_val_set(dev, XTRX_TRX, XTRX_CH_ALL, XTRX_LMS7_VIO, vio);
 	}
 
 	if (dmarx) {
@@ -935,8 +942,8 @@ int main(int argc, char** argv)
 		}
 		fprintf(stderr, "TX tunned: %f\n", txactualfreq);
 
-		if (txfreq < 1000e6) {
-			xtrx_set_antenna(dev, XTRX_TX_L);
+		if (txfreq > 2300e6) {
+			xtrx_set_antenna(dev, XTRX_TX_H);
 		} else {
 			xtrx_set_antenna(dev, XTRX_TX_W);
 		}
@@ -953,6 +960,39 @@ int main(int argc, char** argv)
 			goto falied_tune;
 		}
 		fprintf(stderr, "TX PAD gain: %f\n", actuallnagain);
+	}
+
+	if (gmode > 0) {
+		gtime_data_t in = {0,0};
+		gtime_data_t out;
+		res = xtrx_gtime_op(dev, -1, XTRX_GTIME_DISABLE, in, &out);
+		if (res) {
+			fprintf(stderr, "Failed xtrx_gtime_op(0): %d\n", res);
+			goto falied_tune;
+		}
+
+		unsigned cmd = (gmode == 3) ? XTRX_GTIME_ENABLE_INT_WEXTE :
+						(gmode == 2) ? XTRX_GTIME_ENABLE_INT_WEXT :
+									 XTRX_GTIME_ENABLE_INT;
+
+		in.sec = 7;
+		res = xtrx_gtime_op(dev, -1, cmd, in, &out);
+		if (res) {
+			fprintf(stderr, "Failed xtrx_gtime_op(3): %d\n", res);
+			goto falied_tune;
+		}
+
+		for (unsigned i = 0; i < 8; i++) {
+			usleep(450000);
+			for (unsigned j = 0; j < dev_count; j++) {
+				res = xtrx_gtime_op(dev, j, XTRX_GTIME_GET_CUR, in, &out);
+				if (res) {
+					fprintf(stderr, "Failed xtrx_gtime_op(4): %d\n", res);
+					goto falied_tune;
+				}
+				fprintf(stderr, "Current time[%d]: %08d.%09d\n", j, out.sec, out.nsec);
+			}
+		}
 	}
 
 	s_tx_start_ts = s_tx_skip / (tx_siso ? 1 : 2);
@@ -994,11 +1034,27 @@ int main(int argc, char** argv)
 	params.tx.paketsize = tx_packet_size / ((tx_siso) ? 1 : 2);
 	params.rx_stream_start = rx_skip;
 	params.tx_repeat_buf = NULL; //(tx_repeat_mode) ? BUF : NULL;
+	params.gtime.sec = 11;
+	params.gtime.nsec = 750000000; //250 ms delay
+	if (gmode > 0) {
+		params.nflags |= XTRX_RUN_GTIME;
+	}
 
 	res = xtrx_run_ex(dev, &params);
 	if (res) {
 		fprintf(stderr, "Failed xtrx_run: %d\n", res);
 		goto falied_tune;
+	}
+
+	if (gmode > 0) {
+		gtime_data_t in = {0,0};
+		gtime_data_t out;
+		res = xtrx_gtime_op(dev, -1, XTRX_GTIME_GET_CUR, in, &out);
+		if (res) {
+			fprintf(stderr, "Failed xtrx_gtime_op(4): %d\n", res);
+			goto falied_tune;
+		}
+		fprintf(stderr, "Current time: %08d.%09d\n", out.sec, out.nsec);
 	}
 
 	//

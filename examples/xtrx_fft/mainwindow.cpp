@@ -108,7 +108,11 @@ void MainWindow::redraw(int idx)
 		customPlot->graph(1)->setData(x, *pz[idx]);
 	}
 
+#if defined(QCUSTOMPLOT_VERSION) && (QCUSTOMPLOT_VERSION >= 0x020000)
+	customPlot->replot(QCustomPlot::rpImmediateRefresh);
+#else
 	customPlot->replot(QCustomPlot::rpImmediate);
+#endif
 }
 
 
@@ -141,8 +145,8 @@ void MainWindow::on_btStartStop_clicked()
 	QString devstr = ui->cbDev->currentText();
 
 	if (dev == NULL) {
-		ui->widget->graph(0)->clearData();
-		ui->widget->graph(1)->clearData();
+		ui->widget->graph(0)->data()->clear();
+		ui->widget->graph(1)->data()->clear();
 
 		ui->statusbar->showMessage(QString("Samplerate %1 MSPS Gain: %2").arg(samplerate).arg(gain));
 		res = xtrx_open(devstr.toLatin1(), 4, &dev);

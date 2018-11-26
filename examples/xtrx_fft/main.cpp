@@ -23,8 +23,9 @@
 
 #include "mainwindow.h"
 
-void qInitResources_application()
+int qInitResources_application()
 {
+    return 0;
 }
 
 int main(int argc, char *argv[])

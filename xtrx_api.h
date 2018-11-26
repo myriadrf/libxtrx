@@ -56,6 +56,12 @@ enum xtrx_flags {
 	XTRX_O_RESET            = 0x0100,
 };
 
+typedef struct gtime_data {
+	uint32_t sec;
+	uint32_t nsec;
+} gtime_data_t;
+
+
 /**
  * @brief master_ts
  */
@@ -79,6 +85,17 @@ XTRX_API int xtrx_open(const char* device, unsigned flags, struct xtrx_dev** dev
  * @return
  */
 XTRX_API int xtrx_open_multi(unsigned numdevs, const char** devices, unsigned flags, struct xtrx_dev** dev);
+
+/** Open XTRX device form semicolon separated device list
+ * @param devices   Path to XTRX devices, semicolon separated (returned from xtrx_discovery)
+ * @param flags     Semicolon separated flags. Can be NULL.
+ * @param[out] dev  XTRX device handle
+ * @return number of devices on success, errno on error
+ *
+ * When @ref devices is NULL only first enumerated device is created.
+ * Only 'loglevel' flag is parsed.
+ */
+XTRX_API int xtrx_open_list(const char* devices, const char* flags, struct xtrx_dev** dev);
 
 /** Close XTRX device
  * @param dev       XTRX device handle
@@ -220,7 +237,7 @@ typedef enum xtrx_antenna {
 	XTRX_RX_H,
 	XTRX_RX_W,
 
-	XTRX_TX_L,
+	XTRX_TX_H,
 	XTRX_TX_W,
 
 	XTRX_RX_L_LB, // loopback
@@ -232,6 +249,8 @@ typedef enum xtrx_antenna {
 } xtrx_antenna_t;
 
 XTRX_API int xtrx_set_antenna(struct xtrx_dev* dev, xtrx_antenna_t antenna);
+
+XTRX_API int xtrx_set_antenna_ex(struct xtrx_dev* dev, xtrx_channel_t ch, xtrx_antenna_t antenna);
 
 typedef enum xtrx_wire_format {
 	XTRX_WF_8  = 1,
@@ -255,6 +274,7 @@ typedef enum xtrx_host_format {
 typedef enum xtrx_run_params_flags {
 	XTRX_RUN_DIGLOOPBACK = 1,
 	XTRX_RUN_RXLFSR      = 2,
+	XTRX_RUN_GTIME       = 4,
 } xtrx_run_params_flags_t;
 
 typedef enum xtrx_run_sp_flags {
@@ -284,17 +304,17 @@ typedef struct xtrx_run_stream_params {
 	xtrx_channel_t     chs;
 
 	/** Default packet size in samples (counted for the single channel) */
-	uint16_t           paketsize;
+	uint32_t           paketsize;
 
 	/** Flags of the stream, see xtrx_run_sp_flags_t*/
-	uint16_t           flags;
+	uint32_t           flags;
 
 	/** Optional scale value for XTRX_IQ_FLOAT32, it'll be [-scale, scale],
 	 * by default it's [-1;1] */
 	float              scale;
 
 	/** Reserved for future extension to keep ABI structure the same size */
-	uint32_t           reserved[12 - 5];
+	uint32_t           reserved[12 - 6];
 } xtrx_run_stream_params_t;
 
 
@@ -311,7 +331,101 @@ typedef struct xtrx_run_params {
 	 *  any xtrx_send_burst_sync() call
 	 */
 	void*                    tx_repeat_buf;
+
+	gtime_data_t             gtime;
+
+	/** Reserved for future extension to keep ABI structure the same size */
+	uint32_t                 reserved[8];
 } xtrx_run_params_t;
+
+
+typedef enum xtrx_gtime_cmd {
+    XTRX_GTIME_ENABLE_INT,      /**< Time is ignored, applied immediate */
+    XTRX_GTIME_ENABLE_INT_WEXT, /**< Internal with ext generation */
+    XTRX_GTIME_ENABLE_INT_WEXTE,
+    XTRX_GTIME_ENABLE_EXT,
+    XTRX_GTIME_DISABLE,
+    XTRX_GTIME_GET_RESOLUTION,
+    XTRX_GTIME_SET_GENSEC,
+    XTRX_GTIME_GET_CUR,
+    XTRX_GTIME_APPLY_CORRECTION,
+    XTRX_GTIME_GET_GPSPPS_DELTA,
+    //XTRX_GTIME_ENABLE_AT_GPSPPS,
+} xtrx_gtime_cmd_t;
+
+XTRX_API int xtrx_gtime_op(struct xtrx_dev* dev, int devno,
+                           xtrx_gtime_cmd_t cmd, gtime_data_t in,
+                           gtime_data_t *out);
+
+enum xtrx_gpios {
+    XTRX_GPIO_ALL = -1,
+
+    XTRX_GPIO1 = 0,
+    XTRX_GPIO_PPS_I = XTRX_GPIO1,
+
+    XTRX_GPIO2 = 1,
+    XTRX_GPIO_PPS_O = XTRX_GPIO2,
+
+    XTRX_GPIO3 = 2,
+    XTRX_GPIO_TDD = XTRX_GPIO3,
+
+    XTRX_GPIO4 = 3,
+
+    XTRX_GPIO5 = 4,
+    XTRX_GPIO_LED_WWAN = XTRX_GPIO5,
+
+    XTRX_GPIO6 = 5,
+    XTRX_GPIO_LED_WLAN = XTRX_GPIO6,
+
+    XTRX_GPIO7 = 6,
+    XTRX_GPIO_LED_WPAN = XTRX_GPIO7,
+
+    XTRX_GPIO8 = 7,
+
+    XTRX_GPIO9 = 8,
+    XTRX_GPIO_EXT0 = XTRX_GPIO9,
+
+    XTRX_GPIO10 = 9,
+    XTRX_GPIO_EXT1 = XTRX_GPIO10,
+
+    XTRX_GPIO11 = 10,
+    XTRX_GPIO_EXT2 = XTRX_GPIO11,
+
+    XTRX_GPIO12 = 11,
+    XTRX_GPIO_EXT3 = XTRX_GPIO12,
+    XTRX_GPIO_EPPS_O = XTRX_GPIO12,
+
+    // Pseudo GPIOs
+    XTRX_LED = 12,
+
+    XTRX_SAFE = 13,
+
+    XTRX_GPIOS_TOTAL = 14,
+};
+
+typedef enum xtrx_gpio_func {
+    XTRX_GPIO_FUNC_IN,
+    XTRX_GPIO_FUNC_OUT,
+
+    // special function
+    XTRX_GPIO_FUNC_PPS_O,
+    XTRX_GPIO_FUNC_PPS_I,
+
+    // gpio specific funcs
+    XTRX_GPIO_FUNC_ALT0,
+    XTRX_GPIO_FUNC_ALT1,
+    XTRX_GPIO_FUNC_ALT2,
+} xtrx_gpio_func_t;
+
+XTRX_API int xtrx_gpio_configure(struct xtrx_dev* dev, int devno,
+                                 int gpio_num, xtrx_gpio_func_t function);
+
+XTRX_API int xtrx_gpio_out(struct xtrx_dev* dev, int devno, unsigned out);
+
+XTRX_API int xtrx_gpio_clear_set(struct xtrx_dev* dev, int devno,
+                                 unsigned clear_msk, unsigned set_msk);
+
+XTRX_API int xtrx_gpio_in(struct xtrx_dev* dev, int devno, unsigned* in);
 
 /**
  * @brief xtrx_run_params_init Initialize parameters with default values
@@ -432,6 +546,8 @@ typedef enum xtrx_val {
 	XTRX_LML_PHY_FBPHASE,
 	XTRX_DSPFE_CMD,
 
+	XTRX_TX_TIME,
+
 	/* Performance counters */
 	XTRX_PERF_SAMPLES = 0x3000,
 	XTRX_PERF_UNOVFLOW,
@@ -441,6 +557,9 @@ typedef enum xtrx_val {
 	 *  is used as index to RFIC onboard */
 	XTRX_RFIC_REG_0 = 0x10000000,
 	XTRX_FE_CUSTOM_0 = 0x20000000,
+
+	/* For internal use only */
+	XTRX_DEBUG_0 = 0x30000000,
 } xtrx_val_t;
 
 XTRX_API int xtrx_val_set(struct xtrx_dev* dev, xtrx_direction_t dir,

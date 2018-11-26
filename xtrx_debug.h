@@ -30,15 +30,20 @@ enum dubug_cmd {
 	DEBUG_RFIC_SPI_RD,
 	DEBUG_BOARD_TEMP,
 	DEBUG_GET_REFCLK,
-	DEBUG_GET_ANT_RX,
-	DEBUG_GET_ANT_TX,
-	DEBUG_SET_ANT_RX,
-	DEBUG_SET_ANT_TX,
+	DEBUG_ANT_RX,
+	DEBUG_ANT_TX,
 	DEBUG_BOARD_DAC,
+	DEBUG_GET_DEVICES,
+	DEBUG_GET_RXIQ_ODD,
+	DEBUG_GET_RXIQ_MISS,
+	DEBUG_VIO,
+	DEBUG_V33,
+	DEBUG_FGP_CTRL,
+	DEBUG_XTRX_GET_REG,
 };
 
 struct xtrx_debug_ops {
-	int (*param_io)(void* obj, unsigned param, uint64_t val, uint64_t* oval);
+	int (*param_io)(void* obj, unsigned param, unsigned chno, uint64_t val, uint64_t* oval);
 };
 typedef struct xtrx_debug_ops xtrx_debug_ops_t;
 

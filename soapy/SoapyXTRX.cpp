@@ -98,8 +98,8 @@ std::vector<std::string> SoapyXTRX::listAntennas(const int direction, const size
 	}
 	if (direction == SOAPY_SDR_TX)
 	{
-		ants.push_back("BAND1");
-		ants.push_back("BAND2");
+		ants.push_back("TXH");
+		ants.push_back("TXW");
 	}
 	return ants;
 }
@@ -121,8 +121,8 @@ void SoapyXTRX::setAntenna(const int direction, const size_t channel, const std:
 	}
 	else if (direction == SOAPY_SDR_TX)
 	{
-		if (name == "BAND1" || name == "B1") a = XTRX_TX_L;
-		else if (name == "BAND2" || name == "B2") a = XTRX_TX_W;
+		if (name == "BAND1" || name == "B1" || name == "TXH") a = XTRX_TX_H;
+		else if (name == "BAND2" || name == "B2" || name == "TXW") a = XTRX_TX_W;
 		else throw std::runtime_error("SoapyXTRX::setAntenna(TX, "+name+") - unknown antenna name");
 
 		_tx_ant = a;
@@ -154,8 +154,8 @@ std::string SoapyXTRX::getAntenna(const int direction, const size_t /*channel*/)
 	{
 		switch (_tx_ant)
 		{
-		case XTRX_TX_L: return "BAND1";
-		case XTRX_TX_W: return "BAND2";
+		case XTRX_TX_H: return "TXH";
+		case XTRX_TX_W: return "TXW";
 		default: return "NONE";
 		}
 	}

@@ -48,66 +48,92 @@ struct xtrx_debug_ctx
 	int clifd;
 };
 
-int xtrx_debug_process_cmd(xtrx_debug_ctx_t* ctx, const char *cmd, unsigned len,
+enum cmdvtype {
+	CMD_VT_NONE,
+	CMD_VT_DEC,
+};
+
+int xtrx_debug_process_cmd(xtrx_debug_ctx_t* ctx, char *cmd, unsigned len,
 						   char* reply, unsigned rlen)
 {
 	uint64_t oval = 0;
+	uint64_t param = 0;
+	unsigned device = 0;
 	int res = -EINVAL;
-	if (strncmp(cmd, "LMS", 3) == 0) {
-		unsigned reg = 0;
-		char chans = 0;
-		int cnt = sscanf(cmd + 4, "%c,%x", &chans, &reg);
-		if (cnt == 2) {
-			uint64_t ch = (chans == 'A') ? 1 :
-						  (chans == 'B') ? 2 :
-						  (chans == 'C') ? 3 : 0;
-			XTRXLLS_LOG("DBGP", XTRXLL_INFO, "LMS write to 0x%08x (%c => %d)\n",
-					   reg, chans, (int)ch);
-			uint64_t v = (ch << 32) | reg;
-			res = ctx->ops->param_io(ctx->obj,
-									 (reg & 0x80000000) ? DEBUG_RFIC_SPI_WR : DEBUG_RFIC_SPI_RD,
-									 v,
-									 &oval);
-		} else {
-			XTRXLLS_LOG("DBGP", XTRXLL_ERROR, "LMS failed to parse! %d\n", cnt);
-		}
-	} else if(strncmp(cmd, "TMP", 3) == 0) {
-		res = ctx->ops->param_io(ctx->obj, DEBUG_BOARD_TEMP, 0, &oval);
-	} else if(strncmp(cmd, "DAC", 3) == 0) {
-		unsigned nval = 0;
-		sscanf(cmd + 4, "%d", &nval);
+	int j;
+	char *pptr[2];
+	char *str1, *saveptr1, *token;
+	enum dubug_cmd dcmd;
+	enum cmdvtype vt = CMD_VT_NONE;
 
-		res = ctx->ops->param_io(ctx->obj, DEBUG_BOARD_DAC, nval, &oval);
-	} else if(strncmp(cmd, "FREF", 4) == 0) {
-		res = ctx->ops->param_io(ctx->obj, DEBUG_GET_REFCLK, 0, &oval);
-	} else if(strncmp(cmd, "RDANT", 5) == 0) {
-		uint64_t arx, atx;
-		res = ctx->ops->param_io(ctx->obj, DEBUG_GET_ANT_RX, 0, &arx);
-		if (res)
-			goto fail;
-		res = ctx->ops->param_io(ctx->obj, DEBUG_GET_ANT_TX, 0, &atx);
-		if (res)
-			goto fail;
+	XTRXLLS_LOG("DBGP", XTRXLL_DEBUG, "got cmd: %s\n", cmd);
 
-		oval = (atx << 2) | arx;
-	} else if(strncmp(cmd, "WRANT", 5) == 0) {
-		int nant = 0;
-		sscanf(cmd + 6, "%d", &nant);
-		unsigned arx = nant & 3, atx = (nant >> 2) & 1;
+	for (j = 1, str1 = cmd; ; j++, str1 = NULL) {
+		token = strtok_r(str1, ",", &saveptr1);
+		if (token == NULL)
+			break;
 
-		res = ctx->ops->param_io(ctx->obj, DEBUG_SET_ANT_RX, arx, &oval);
-		if (res)
-			goto fail;
-		res = ctx->ops->param_io(ctx->obj, DEBUG_SET_ANT_TX, atx, &oval);
-		if (res)
-			goto fail;
-	} else {
-		XTRXLLS_LOG("DBGP", XTRXLL_ERROR, "unrecognised command! %c\n", cmd[0]);
+		pptr[j - 1] = token;
 	}
 
-fail:
+	if (strcmp(cmd, "LMS") == 0) {
+		if (j < 3)
+			goto incorrect_format;
+
+		param = strtol(pptr[2], NULL, 16);
+		dcmd = (param & 0x80000000) ? DEBUG_RFIC_SPI_WR : DEBUG_RFIC_SPI_RD;
+	} else if (strcmp(cmd, "TMP") == 0) {
+		dcmd = DEBUG_BOARD_TEMP;
+	} else if(strcmp(cmd, "DAC") == 0) {
+		dcmd = DEBUG_BOARD_DAC;
+		vt = CMD_VT_DEC;
+	} else if(strcmp(cmd, "FREF") == 0) {
+		dcmd = DEBUG_GET_REFCLK;
+	} else if(strcmp(cmd, "ANTRX") == 0) {
+		dcmd = DEBUG_ANT_RX;
+		vt = CMD_VT_DEC;
+		param = UINT_MAX;
+	} else if(strcmp(cmd, "ANTTX") == 0) {
+		dcmd = DEBUG_ANT_TX;
+		vt = CMD_VT_DEC;
+		param = UINT_MAX;
+	} else if (strcmp(cmd, "DEVS") == 0) {
+		dcmd = DEBUG_GET_DEVICES;
+	} else if (strcmp(cmd, "RXIQA") == 0) {
+		dcmd = DEBUG_GET_RXIQ_ODD;
+	} else if (strcmp(cmd, "RXIQB") == 0) {
+		dcmd = DEBUG_GET_RXIQ_MISS;
+	} else if (strcmp(cmd, "VIO") == 0) {
+		dcmd = DEBUG_VIO;
+		vt = CMD_VT_DEC;
+	} else if (strcmp(cmd, "VGP") == 0) {
+		dcmd = DEBUG_V33;
+		vt = CMD_VT_DEC;
+	} else if (strcmp(cmd, "FGP") == 0) {
+		dcmd = DEBUG_FGP_CTRL;
+		vt = CMD_VT_DEC;
+		param = UINT_MAX;
+	} else if (strcmp(cmd, "GETREG") == 0) {
+		dcmd = DEBUG_XTRX_GET_REG;
+		vt = CMD_VT_DEC;
+		param = UINT_MAX;
+	} else {
+		XTRXLLS_LOG("DBGP", XTRXLL_ERROR, "unrecognized command! %s\n", cmd);
+	}
+
+	if (j > 1) {
+		device = strtol(pptr[1], NULL, 16);
+	}
+
+	if (vt != CMD_VT_NONE && j > 2) {
+		param = strtoll(pptr[2], NULL, 10);
+	}
+
+	res = ctx->ops->param_io(ctx->obj, dcmd, device, param, &oval);
+
+incorrect_format:
 	if (res == 0) {
-		return snprintf(reply, rlen, "OK,%016" PRId64 "\n", oval);
+		return snprintf(reply, rlen, "OK,%016" PRIx64 "\n", oval);
 	} else {
 		return snprintf(reply, rlen, "FAIL,%d\n", res);
 	}
@@ -183,6 +209,9 @@ static void* _xtrx_thread(void* param)
 				}
 				continue;
 			}
+
+			// Terminate string
+			*end = 0;
 
 			pthread_setcancelstate(PTHREAD_CANCEL_DISABLE, NULL);
 			replen = xtrx_debug_process_cmd(ctx, buffer, end - buffer,
