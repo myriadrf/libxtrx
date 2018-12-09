@@ -1562,6 +1562,10 @@ int lms7nfe_fe_set_lna(struct xtrx_fe_obj* obj,
 	default: return -EINVAL;
 	}
 
+	res = lms7_mac_set(&dev->lms_state, ch);
+	if (res)
+		return res;
+
 	if (tx) {
 		dev->tx_lna_auto = false;
 		return _xtrx_set_lna_tx(dev, band);
