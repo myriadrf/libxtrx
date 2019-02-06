@@ -272,6 +272,9 @@ static int _debug_param_io(void* obj, unsigned param, unsigned chno, uint64_t va
 		}
 		return res;
 	}
+	default:
+		XTRXLLS_LOG("XTRX", XTRXLL_WARNING, "%s: Unknown CMDIDX:%x\n",
+					_devname(&dev[devno]), param);
 	}
 
 
@@ -579,8 +582,11 @@ int xtrx_set_ref_clk(struct xtrx_dev* dev, unsigned refclkhz, xtrx_clock_source_
 		int osc;
 		res = xtrxll_get_sensor(dev[devnum].lldev, XTRXLL_REFCLK_CLK, &osc);
 		if (res) {
+			XTRXLLS_LOG("XTRX", XTRXLL_ERROR, "%s: Unable to get OSC VAL (%d)\n",
+						_devname(&dev[devnum]), res);
 			return res;
 		}
+
 		if (abs((int)dev->refclock - osc) * (int64_t)(1000000/PPM_LIMIT) / dev->refclock > 1) {
 			XTRXLLS_LOG("XTRX", XTRXLL_ERROR, "%s: RefClk %d doesn't look like %d on master!\n",
 					   _devname(&dev[devnum]), osc, (int)dev->refclock);
@@ -699,6 +705,9 @@ int xtrx_tune_ex(struct xtrx_dev* dev, xtrx_tune_t type, xtrx_channel_t ch,
 
 		for (unsigned devnum = 0; devnum < dev->dev_max; devnum++) {
 			unsigned fe_ch = (ch >> (2 * devnum)) & XTRX_CH_AB;
+			if (fe_ch == 0)
+				continue;
+
 			res = dev[devnum].fe->ops->fe_set_freq(dev[devnum].fe, fe_ch, type, freq, actualfreq);
 			if (res)
 				return res;
@@ -709,6 +718,9 @@ int xtrx_tune_ex(struct xtrx_dev* dev, xtrx_tune_t type, xtrx_channel_t ch,
 	case XTRX_TUNE_BB_TX:
 		for (unsigned devnum = 0; devnum < dev->dev_max; devnum++) {
 			unsigned fe_ch = (ch >> (2 * devnum)) & XTRX_CH_AB;
+			if (fe_ch == 0)
+				continue;
+
 			res = dev[devnum].fe->ops->bb_set_freq(dev[devnum].fe, fe_ch, type, freq, actualfreq);
 			if (res)
 				return res;
@@ -726,6 +738,9 @@ static int xtrx_tune_bandwidth(struct xtrx_dev* dev, xtrx_channel_t xch,
 	unsigned type = (rbb) ? XTRX_TUNE_BB_RX : XTRX_TUNE_BB_TX;
 	for (unsigned devnum = 0; devnum < dev->dev_max; devnum++) {
 		unsigned fe_ch = (xch >> (2 * devnum)) & XTRX_CH_AB;
+		if (fe_ch == 0)
+			continue;
+
 		res = dev[devnum].fe->ops->bb_set_badwidth(dev[devnum].fe, fe_ch, type, bw, actualbw);
 		if (res)
 			return res;
@@ -761,6 +776,9 @@ int xtrx_set_gain(struct xtrx_dev* dev, xtrx_channel_t xch, xtrx_gain_type_t gt,
 	int res;
 	for (unsigned devnum = 0; devnum < dev->dev_max; devnum++) {
 		unsigned fe_ch = (xch >> (2 * devnum)) & XTRX_CH_AB;
+		if (fe_ch == 0)
+			continue;
+
 		res = dev[devnum].fe->ops->bb_set_gain(dev[devnum].fe, fe_ch, gt, gain, actualgain);
 		if (res)
 			return res;
@@ -779,6 +797,9 @@ int xtrx_set_antenna_ex(struct xtrx_dev* dev, xtrx_channel_t ch, xtrx_antenna_t 
 	int res;
 	for (unsigned devnum = 0; devnum < dev->dev_max; devnum++) {
 		unsigned fe_ch = (ch >> (2 * devnum)) & XTRX_CH_AB;
+		if (fe_ch == 0)
+			continue;
+
 		res = dev[devnum].fe->ops->fe_set_lna(dev[devnum].fe, fe_ch, 0, antenna);
 		if (res)
 			return res;
@@ -952,6 +973,11 @@ int xtrx_run_ex(struct xtrx_dev* dev, const xtrx_run_params_t* params)
 	for (unsigned devnum = 0; devnum < dev->dev_max; devnum++) {
 		fe_params.rx.chs = (params->rx.chs >> (2 * devnum)) & XTRX_CH_AB;
 		fe_params.tx.chs = (params->tx.chs >> (2 * devnum)) & XTRX_CH_AB;
+		if (fe_params.rx.chs == 0 && fe_params.tx.chs == 0) {
+			XTRXLLS_LOG("XTRX", XTRXLL_INFO, "%s: Skipping RX/TX configuration\n",
+						_devname(&dev[devnum]));
+			continue;
+		}
 
 		res = dev[devnum].fe->ops->dd_set_modes(dev[devnum].fe, XTRX_FEDD_CONFIGURE, &fe_params);
 		if (res)
@@ -1304,6 +1330,7 @@ int xtrx_send_sync_ex(struct xtrx_dev* mdev, xtrx_send_ex_info_t *info)
 					abort();
 				case -EIO:
 				case -EBUSY:
+				case -ETIMEDOUT:
 					return res;
 				case 0:
 					dev->txbuf = wire_buffer_ptr;
@@ -1861,7 +1888,14 @@ static int _xtrx_val_get_int(struct xtrx_dev* dev, xtrx_direction_t dir,
 			*oval = val;
 		}
 		return res;
-
+	case XTRX_REF_REFCLK:
+		if (!dev->refclock_checked) {
+			res = xtrx_set_ref_clk(dev, 0, dev->clock_source);
+			if (res)
+				return res;
+		}
+		*oval = dev->refclock;
+		return 0;
 	case XTRX_LMS7_DATA_RATE:
 	case XTRX_LMS7_RSSI:
 		return dev->fe->ops->get_reg(dev->fe, chan, dir, type, oval);

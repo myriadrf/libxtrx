@@ -61,25 +61,25 @@ int xtrx_debug_process_cmd(xtrx_debug_ctx_t* ctx, char *cmd, unsigned len,
 	unsigned device = 0;
 	int res = -EINVAL;
 	int j;
-	char *pptr[2];
-	char *str1, *saveptr1, *token;
+	char *pptr[4] = {NULL,};
+	char *str1 = NULL, *saveptr1 = NULL, *token = NULL;
 	enum dubug_cmd dcmd;
 	enum cmdvtype vt = CMD_VT_NONE;
 
 	XTRXLLS_LOG("DBGP", XTRXLL_DEBUG, "got cmd: %s\n", cmd);
 
-	for (j = 1, str1 = cmd; ; j++, str1 = NULL) {
+	for (j = 0, str1 = cmd; j < 4; j++, str1 = NULL) {
 		token = strtok_r(str1, ",", &saveptr1);
 		if (token == NULL)
 			break;
 
-		pptr[j - 1] = token;
+		pptr[j] = token;
 	}
 
 	if (strcmp(cmd, "LMS") == 0) {
-		if (j < 3)
+		if (j < 3) {
 			goto incorrect_format;
-
+		}
 		param = strtol(pptr[2], NULL, 16);
 		dcmd = (param & 0x80000000) ? DEBUG_RFIC_SPI_WR : DEBUG_RFIC_SPI_RD;
 	} else if (strcmp(cmd, "TMP") == 0) {
@@ -119,6 +119,7 @@ int xtrx_debug_process_cmd(xtrx_debug_ctx_t* ctx, char *cmd, unsigned len,
 		param = UINT_MAX;
 	} else {
 		XTRXLLS_LOG("DBGP", XTRXLL_ERROR, "unrecognized command! %s\n", cmd);
+		goto incorrect_format;
 	}
 
 	if (j > 1) {
