@@ -149,6 +149,9 @@ static int _debug_param_io(void* obj, unsigned param, unsigned chno, uint64_t va
 		return -EINVAL;
 	}
 
+	XTRXLLS_LOG("XTRX", XTRXLL_WARNING, "%s: DEBUG: %x %x %lx\n",
+				_devname(&dev[devno]), param, chno, val);
+
 	switch (param) {
 	case DEBUG_RFIC_SPI_WR:
 		return xtrx_val_set(dev, XTRX_TRX, xch,
@@ -334,7 +337,7 @@ int xtrx_open(const char* device, unsigned flags, struct xtrx_dev** outdev)
 
 	xtrxdsp_init();
 
-	res = xtrx_fe_init(lldev, flags, &dev->fe);
+	res = xtrx_fe_init(dev, lldev, flags, NULL, &dev->fe);
 	if (res) {
 		XTRXLLS_LOG("XTRX", XTRXLL_ERROR, "%s: Failed to initialize frontend: err=%d\n",
 					_devname(dev), res);
@@ -363,21 +366,23 @@ failed_openll:
 enum {
 	XTRX_DEVS_MAX = 32
 };
-int xtrx_open_multi(unsigned numdevs, const char** devices, unsigned flags, struct xtrx_dev** outdev)
+int xtrx_open_multi(const xtrx_open_multi_info_t *dinfo, struct xtrx_dev** outdev)
 {
 	int res;
-	int loglevel = flags & XTRX_O_LOGLVL_MASK;
-	xtrxll_set_loglevel(loglevel);
+	int loglevel = dinfo->loglevel;
+	if (loglevel >= 0) {
+		xtrxll_set_loglevel(loglevel);
+	}
 
-	if (numdevs > XTRX_DEVS_MAX || numdevs == 0) {
+	if (dinfo->devcount > XTRX_DEVS_MAX || dinfo->devcount == 0) {
 		XTRXLLS_LOG("XTRX", XTRXLL_ERROR, "Incorrect number of XTRXes in the multidevice: %d!\n",
-					numdevs);
+					dinfo->devcount);
 		return -EINVAL;
 	}
 
 	struct xtrxll_dev* lldev[XTRX_DEVS_MAX];
-	for (unsigned num = 0; num < numdevs; num++) {
-		res = xtrxll_open(devices[num], XTRXLL_FULL_DEV_MATCH, &lldev[num]);
+	for (unsigned num = 0; num < dinfo->devcount; num++) {
+		res = xtrxll_open(dinfo->devices[num], XTRXLL_FULL_DEV_MATCH, &lldev[num]);
 		if (res) {
 			for (; num > 0; num--) {
 				xtrxll_close(lldev[num - 1]);
@@ -389,24 +394,28 @@ int xtrx_open_multi(unsigned numdevs, const char** devices, unsigned flags, stru
 	xtrxdsp_init();
 
 	//All devices are claimed
-	struct xtrx_dev* dev = (struct xtrx_dev*)malloc(sizeof(struct xtrx_dev) * numdevs);
+	struct xtrx_dev* dev = (struct xtrx_dev*)malloc(sizeof(struct xtrx_dev) * dinfo->devcount);
 	if (dev == NULL) {
 		res = -errno;
 		goto failed_mem;
 	}
-	memset(dev, 0, sizeof(struct xtrx_dev) * numdevs);
+	memset(dev, 0, sizeof(struct xtrx_dev) * dinfo->devcount);
 
-	for (unsigned num = 0; num < numdevs; num++) {
+	for (unsigned num = 0; num < dinfo->devcount; num++) {
 		dev[num].dev_idx = num;
-		dev[num].dev_max = numdevs;
+		dev[num].dev_max = dinfo->devcount;
 		dev[num].lldev = lldev[num];
 		dev[num].refclock = 0;
 		dev[num].clock_source = XTRX_CLKSRC_INT;
+		dev[num].fe = dev[0].fe;
 
-		res = xtrx_fe_init(lldev[num], flags, &dev[num].fe);
+		res = xtrx_fe_init(&dev[num], lldev[num],
+						   (num == 0 ? XTRX_FE_MASTER : 0) | num,
+						   (dinfo->flags & XTRX_OMI_FE_SET) ? dinfo->frontend : NULL,
+						   &dev[num].fe);
 		if (res) {
 			XTRXLLS_LOG("XTRX", XTRXLL_ERROR, "%s: Failed to initialize frontend: err=%d on dev %d/%d\n",
-					   _devname(dev), res, num, numdevs);
+					   _devname(dev), res, num, dinfo->devcount);
 			for (; num > 0; num--) {
 				dev[num - 1].fe->ops->fe_deinit(dev[num - 1].fe);
 			}
@@ -414,10 +423,13 @@ int xtrx_open_multi(unsigned numdevs, const char** devices, unsigned flags, stru
 		}
 	}
 
-	res = xtrx_debug_init(NULL, &_debug_ops, dev, &dev->debugif);
-	if (res) {
-		XTRXLLS_LOG("XTRX", XTRXLL_WARNING, "%s: Failed to initialize debug service: err=%d\n",
-					_devname(dev), res);
+	if (dinfo->flags & XTRX_OMI_DEBUGIF) {
+		res = xtrx_debug_init(NULL, &_debug_ops, dev, &dev->debugif);
+		if (res) {
+			XTRXLLS_LOG("XTRX", XTRXLL_WARNING, "%s: Failed to initialize debug service: err=%d\n",
+						_devname(dev), res);
+			goto failed_fe;
+		}
 	}
 
 	*outdev = dev;
@@ -426,25 +438,51 @@ int xtrx_open_multi(unsigned numdevs, const char** devices, unsigned flags, stru
 failed_fe:
 	free(dev);
 failed_mem:
-	for (unsigned num = 0; num < numdevs; num++) {
+	for (unsigned num = 0; num < dinfo->devcount; num++) {
 		xtrxll_close(lldev[num]);
 	}
 	return res;
 }
 
-int xtrx_open_list(const char* devices, const char *flags, struct xtrx_dev** dev)
+int xtrx_open_string(const char* paramstring, struct xtrx_dev** dev)
 {
-	int res, j;
-	char cpstr[4096];
+	int res;
+	char copypstr[4096];
 	char* str;
 	char* saveptr;
-	char* ldevices[XTRX_DEVS_MAX];
+	char* ldevices[XTRX_DEVS_MAX] = {0};
 
-	unsigned loglevel = 0;
+	char* devices = NULL;
+	char* flags = NULL;
+
+	xtrxll_log_initialize(NULL);
+
+	xtrx_open_multi_info_t params;
+	memset(&params, 0, sizeof(params));
+
+	params.loglevel = -1;
+	params.devcount = 1;
+	params.devices = (const char**)ldevices;
+
+	if (paramstring) {
+		strncpy(copypstr, paramstring, sizeof(copypstr));
+		devices = copypstr;
+
+		char* separator = strstr(copypstr, ";;");
+		if (devices == separator) {
+			devices = NULL;
+		}
+		if (separator) {
+			*separator = 0;
+			separator += 2;
+			if (*separator != 0) {
+				flags = separator;
+			}
+		}
+	}
 
 	if (flags) {
-		strncpy(cpstr, flags, sizeof(cpstr));
-		for (str = cpstr; ; str = NULL) {
+		for (str = flags; ; str = NULL) {
 			char* token = strtok_r(str, ";", &saveptr);
 			if (token == NULL)
 				break;
@@ -459,45 +497,45 @@ int xtrx_open_list(const char* devices, const char *flags, struct xtrx_dev** dev
 			}
 			if (strcmp(token, "loglevel") == 0) {
 				if (val != NULL) {
-					loglevel = atoi(val) & XTRX_O_LOGLVL_MASK;
+					params.loglevel = atoi(val) & XTRX_O_LOGLVL_MASK;
 
-					xtrxll_set_loglevel(loglevel);
+					xtrxll_set_loglevel(params.loglevel);
 				}
+			} else if (strcmp(token, "fe") == 0) {
+				params.frontend = val;
+				params.flags |= XTRX_OMI_FE_SET;
+			} else if (strcmp(token, "debug") == 0) {
+				params.flags |= XTRX_OMI_DEBUGIF;
 			} else {
-				XTRXLLS_LOG("XTRX", XTRXLL_INFO,
+				XTRXLLS_LOG("XTRX", XTRXLL_ERROR,
 							"xtrx_open(): unknown flag '%s' with value '%s'\n",
 							token, val);
 			}
 		}
 	}
 
-	if (!devices || *devices == 0) {
-		res = xtrx_open(NULL, loglevel, dev);
-		if (res)
-			return res;
-
-		return 1;
+	if (devices) {
+		int j;
+		for (j = 0, str = devices; j < XTRX_DEVS_MAX; j++, str = NULL) {
+			char* token = strtok_r(str, ";", &saveptr);
+			if (token == NULL)
+				break;
+			ldevices[j] = token;
+			XTRXLLS_LOG("XTRX", XTRXLL_INFO, "xtrx_open(): dev[%d]='%s'\n",
+						j, ldevices[j]);
+		}
+		if (j == 0) {
+			XTRXLLS_LOG("XTRX", XTRXLL_INFO, "xtrx_open(): no devices were found\n");
+			return -ENOENT;
+		}
+		params.devcount = j;
 	}
 
-	strncpy(cpstr, devices, sizeof(cpstr));
-	for (j = 0, str = cpstr; j < XTRX_DEVS_MAX; j++, str = NULL) {
-		char* token = strtok_r(str, ";", &saveptr);
-		if (token == NULL)
-			break;
-		ldevices[j] = token;
-		XTRXLLS_LOG("XTRX", XTRXLL_INFO, "xtrx_open(): dev[%d]='%s'\n",
-					j, ldevices[j]);
-	}
-	if (j == 0) {
-		XTRXLLS_LOG("XTRX", XTRXLL_INFO, "xtrx_open(): no devices were found\n");
-		return -ENOENT;
-	}
-
-	res = xtrx_open_multi(j, (const char**)ldevices, loglevel, dev);
+	res = xtrx_open_multi(&params, dev);
 	if (res)
 		return res;
 
-	return j;
+	return params.devcount;
 }
 
 void xtrx_close(struct xtrx_dev* dev)
@@ -1618,12 +1656,12 @@ got_buffer:
 		if (user_processed == 0) {
 			info->out_first_sample = dev->rx_samples >> dev->rx_host_decim;
 		}
-
+/*
 		XTRXLLS_LOG("XTRX", (dev->rxbuf_ts + dev->rxbuf_processed_ts != dev->rx_samples) ? XTRXLL_WARNING : XTRXLL_DEBUG,
 				   "%s: Total=%u Processed=%u UserTotal=%u UserProcessed=%u BUFTS=%" PRIu64 "+%" PRIu64 " OURTS=%" PRIu64 "\n",
 				   _devname(dev), dev->rxbuf_total, dev->rxbuf_processed, (unsigned)user_total, (unsigned)user_processed,
 				   dev->rxbuf_ts, dev->rxbuf_processed_ts, dev->rx_samples);
-
+*/
 		/* bytes need to fill in user */
 		size_t remaining = user_total - user_processed;
 		unsigned bcnt = single_ch_streaming ? 1 : 2;
@@ -1813,6 +1851,8 @@ static int _xtrx_val_set_int(struct xtrx_dev* dev, xtrx_direction_t dir,
 				 xtrx_channel_t chan, xtrx_val_t type, uint64_t val)
 {
 	if (type >= XTRX_RFIC_REG_0 && type <= XTRX_RFIC_REG_0 + 65535)	{
+		XTRXLLS_LOG("XTRX", XTRXLL_INFO, "%s: FE REG %x %x\n",
+					_devname(dev), type, val);
 		return dev->fe->ops->set_reg(dev->fe, chan, dir, type, val);
 	}
 

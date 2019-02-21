@@ -76,6 +76,24 @@ typedef uint64_t master_ts;
  */
 XTRX_API int xtrx_open(const char* device, unsigned flags, struct xtrx_dev** dev);
 
+enum {
+    XTRX_OMI_DEBUGIF = 1,
+    XTRX_OMI_FE_SET = 2,
+};
+
+typedef struct xtrx_open_multi_info {
+    uint32_t flags;
+    uint32_t flagsex;
+
+    unsigned devcount;
+    int loglevel;
+
+    const char** devices;
+
+    const char* frontend;
+    void* reserved[32 - 1];
+} xtrx_open_multi_info_t;
+
 /** Open XTRX composed of multiply devices
  * @brief xtrx_open_multi
  * @param numdevs
@@ -84,18 +102,28 @@ XTRX_API int xtrx_open(const char* device, unsigned flags, struct xtrx_dev** dev
  * @param dev
  * @return
  */
-XTRX_API int xtrx_open_multi(unsigned numdevs, const char** devices, unsigned flags, struct xtrx_dev** dev);
+XTRX_API int xtrx_open_multi(const xtrx_open_multi_info_t* dinfo, struct xtrx_dev** dev);
 
 /** Open XTRX device form semicolon separated device list
- * @param devices   Path to XTRX devices, semicolon separated (returned from xtrx_discovery)
- * @param flags     Semicolon separated flags. Can be NULL.
+ * @param paramstring  Path to XTRX devices, semicolon separated followed by double semicolon and flags
  * @param[out] dev  XTRX device handle
  * @return number of devices on success, errno on error
+ *
+ * String should not contain any whitespaces, all names should be in ASCII with
+ * ending 0 character
+ *
+ * Examples:
+ * NULL -- just first enumerated device and open with default parameters
+ * "usb3380" -- Open usb3380 XTRX
+ * ";;loglevel=7" -- Open first enumerated with specific arguments
+ * "/dev/xtrx0;/dex/xtrx1;;fe=octoRFX6;loglevel=4"
  *
  * When @ref devices is NULL only first enumerated device is created.
  * Only 'loglevel' flag is parsed.
  */
-XTRX_API int xtrx_open_list(const char* devices, const char* flags, struct xtrx_dev** dev);
+XTRX_API int xtrx_open_string(const char* paramstring, struct xtrx_dev** dev);
+
+
 
 /** Close XTRX device
  * @param dev       XTRX device handle
@@ -246,6 +274,7 @@ typedef enum xtrx_antenna {
 	XTRX_RX_AUTO,  // automatic selection
 	XTRX_TX_AUTO,  // automatic selection
 
+	XTRX_RX_ADC_EXT, // External ADC input
 } xtrx_antenna_t;
 
 XTRX_API int xtrx_set_antenna(struct xtrx_dev* dev, xtrx_antenna_t antenna);
@@ -291,6 +320,8 @@ typedef enum xtrx_run_sp_flags {
 
 	XTRX_STREAMDSP_1        = 512,
 	XTRX_STREAMDSP_2        = 1024,
+
+	XTRX_RSP_SWAP_IQA       = 2048, /* swap IQ only in one channel A */
 } xtrx_run_sp_flags_t;
 
 typedef struct xtrx_run_stream_params {

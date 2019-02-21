@@ -18,25 +18,62 @@
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA
  */
 #include "xtrx_fe.h"
-#include "xtrxll_api.h"
+#include <errno.h>
+#include <string.h>
 
-#ifdef HAVE_LMS_NFE
 int lms7nfe_init(struct xtrxll_dev* lldev,
-				unsigned flags,
-				struct xtrx_fe_obj** obj);
-#else
-int lms7fe_init(struct xtrxll_dev* lldev,
-				unsigned flags,
-				struct xtrx_fe_obj** obj);
-#endif
-
-int xtrx_fe_init(struct xtrxll_dev* lldev,
 				 unsigned flags,
+				 const char* fename,
+				 struct xtrx_fe_obj** obj);
+
+int lms7octo_init(struct xtrxll_dev* lldev,
+				  unsigned flags,
+				  const char* fename,
+				  struct xtrx_fe_obj** obj);
+
+int auto_init(struct xtrxll_dev* lldev,
+			  unsigned flags,
+			  const char* fename,
+			  struct xtrx_fe_obj** obj)
+{
+#if 0
+	int res = lms7octo_init(lldev, flags, fename, obj);
+	if (res == 0 || (res && res != -ENODEV))
+		return res;
+#endif
+	return lms7nfe_init(lldev, flags, fename, obj);
+}
+
+typedef int (*fe_function_t)(struct xtrxll_dev* lldev,
+							 unsigned flags,
+							 const char* fename,
+							 struct xtrx_fe_obj** obj);
+
+struct fe_dictionary {
+	const char* fename;
+	fe_function_t init;
+};
+
+int xtrx_fe_init(struct xtrx_dev* dev,
+				 struct xtrxll_dev *lldev,
+				 unsigned flags,
+				 const char* fename,
 				 struct xtrx_fe_obj** obj)
 {
-#ifdef HAVE_LMS_NFE
-	return lms7nfe_init(lldev, flags, obj);
-#else
-	return lms7fe_init(lldev, flags, obj);
-#endif
+	const struct fe_dictionary fes[] = {
+		{ "octoRFX6", lms7octo_init },
+		{ "lms7", lms7nfe_init },
+		{ "auto", auto_init }
+	};
+
+	if (fename == NULL)
+		return auto_init(lldev, flags, fename, obj);
+
+	for (unsigned i = 0; i < sizeof(fes) / sizeof(fes[0]); i++) {
+		if (strncmp(fename, fes[i].fename, strlen(fes[i].fename)) == 0)
+			return fes[i].init(lldev, flags, fename, obj);
+	}
+
+	// No frontend were found
+	return -EINVAL;
 }

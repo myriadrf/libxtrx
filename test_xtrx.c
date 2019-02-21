@@ -164,7 +164,7 @@ void* thread_rx_to_file(void* obj)
 		sem_post(&rxd->sem_read_rx);
 		rxd->buf_ptr = (rxd->buf_ptr + 1) % rxd->buf_max;
 
-		fprintf(stderr, "RX_TO_FILE: buffer %u written\n", rxd->get_cnt);
+		//fprintf(stderr, "RX_TO_FILE: buffer %u written\n", rxd->get_cnt);
 		rxd->get_cnt++;
 	}
 }
@@ -786,29 +786,21 @@ int main(int argc, char** argv)
 			return 0;
 		}
 
-		unsigned j;
-		char cpstr[1024];
-		strncpy(cpstr, device, sizeof(cpstr));
-
-		char* str1;
-		char* saveptr1;
-		char* devices[MAX_DEVS];
-		for (j = 0, str1 = cpstr; j < MAX_DEVS; j++, str1 = NULL) {
-			char* token = strtok_r(str1, ";", &saveptr1);
-			if (token == NULL)
-				break;
-			devices[j] = token;
+		res = xtrx_open_string(device, &dev);
+		if (res < 0) {
+			fprintf(stderr, "Failed xtrx_open: %d\n", res);
+			goto falied_open;
 		}
-		fprintf(stderr, "Creating multidev for %d devices\n", j);
-		res = xtrx_open_multi(j, (const char**)devices, loglevel, &dev);
-		dev_count = j;
+
+		dev_count = res;
 	} else {
 		res = xtrx_open(device, loglevel | XTRX_O_RESET, &dev);
+		if (res) {
+			fprintf(stderr, "Failed xtrx_open: %d\n", res);
+			goto falied_open;
+		}
+
 		dev_count = 1;
-	}
-	if (res) {
-		fprintf(stderr, "Failed xtrx_open: %d\n", res);
-		goto falied_open;
 	}
 
 	//
@@ -888,6 +880,8 @@ int main(int argc, char** argv)
 	}
 
 	if (dmarx) {
+		xtrx_set_antenna(dev, XTRX_RX_AUTO);
+
 		res = xtrx_tune(dev, XTRX_TUNE_RX_FDD, rxfreq, &rxactualfreq);
 		if (res) {
 			fprintf(stderr, "Failed xtrx_tune: %d\n", res);
@@ -895,6 +889,7 @@ int main(int argc, char** argv)
 		}
 		fprintf(stderr, "RX tunned: %f\n", rxactualfreq);
 
+#if 0
 		if (rxfreq < 900e6) {
 			xtrx_set_antenna(dev, XTRX_RX_L);
 		} else if (rxfreq > 2300e6) {
@@ -902,6 +897,7 @@ int main(int argc, char** argv)
 		} else {
 			xtrx_set_antenna(dev, XTRX_RX_W);
 		}
+#endif
 
 		res = xtrx_tune_rx_bandwidth(dev, ch, rxbandwidth, &actual_rxbandwidth);
 		if (res) {

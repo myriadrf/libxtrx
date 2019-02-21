@@ -8,6 +8,7 @@
 #include <cstdlib>
 #include <algorithm>
 #include <cmath>
+#include <string.h>
 
 
 void SoapyXTRX::xtrx_logfunc(int sevirity, const char* message)
@@ -18,11 +19,40 @@ void SoapyXTRX::xtrx_logfunc(int sevirity, const char* message)
 	SoapySDR::log(SOAPY_SDR_INFO, message);
 }
 
+std::map<std::string, std::weak_ptr<XTRXHandle>> XTRXHandle::s_created;
+
+std::shared_ptr<XTRXHandle> XTRXHandle::get(const std::string& name)
+{
+	auto idx = s_created.find(name);
+	if (idx != s_created.end()) {
+		 if (std::shared_ptr<XTRXHandle> obj = idx->second.lock())
+			 return obj;
+	}
+
+	std::shared_ptr<XTRXHandle> obj = std::make_shared<XTRXHandle>(name);
+	s_created.insert(make_pair(name, obj));
+	return obj;
+}
+
+XTRXHandle::XTRXHandle(const std::string& name)
+{
+	int res = xtrx_open_string(name.c_str(), &_dev);
+	if (res < 0)
+		throw std::runtime_error(std::string("XTRXHandle::XTRXHandle(")+name.c_str()+") - unable to open the device: error: " + strerror(-res));
+	devcnt = res;
+
+	SoapySDR::log(SOAPY_SDR_INFO, std::string("Created: `") + name.c_str() + "`");
+}
+
+XTRXHandle::~XTRXHandle()
+{
+	xtrx_close(_dev);
+}
+
 SoapyXTRX::SoapyXTRX(const SoapySDR::Kwargs &args)
 {
 	SoapySDR::logf(SOAPY_SDR_INFO, "Make connection: '%s'", args.count("dev") ? args.at("dev").c_str() : "*");
 
-	//xtrx_set_logfunction(&SoapyXTRX::xtrx_logfunc);
 	unsigned loglevel = 3;
 #ifdef __linux
 	const char* lenv = getenv("SOAPY_XTRX_LOGLEVEL");
@@ -30,26 +60,29 @@ SoapyXTRX::SoapyXTRX(const SoapySDR::Kwargs &args)
 		loglevel = atoi(lenv);
 	}
 #endif
-	const std::string& dev = args.at("dev");
-	if (args.count("loglvl")) {
-		loglevel = std::stoi(args.at("loglvl"));
-	}
+	const std::string& dev = (args.count("dev")) ? args.at("dev") : "";
 
-	int res = xtrx_open(dev.c_str(), loglevel, &_dev);
-	if (res)
-		throw std::runtime_error("SoapyXTRX::SoapyXTRX("+dev+") - unable to open the device");
+	if (args.count("loglevel")) {
+		loglevel = std::stoi(args.at("loglevel"));
+	}
+	xtrx_log_setlevel(loglevel, NULL);
+
+	_dev = XTRXHandle::get(dev);
 
 	if (args.count("refclk")) {
-		_ref_clk = std::stoi(args.at("refclk"));
-		xtrx_set_ref_clk(_dev, _ref_clk, XTRX_CLKSRC_INT);
+		xtrx_set_ref_clk(_dev->dev(), std::stoi(args.at("refclk")), XTRX_CLKSRC_INT);
 
-		SoapySDR::logf(SOAPY_SDR_DEBUG, "SoapyXTRX::SoapyXTRX() set RefClk to %d", _ref_clk);
+		SoapySDR::logf(SOAPY_SDR_DEBUG, "SoapyXTRX::SoapyXTRX() set ref to internal clock");
+	}
+	if (args.count("extclk")) {
+		xtrx_set_ref_clk(_dev->dev(), std::stoi(args.at("extclk")), XTRX_CLKSRC_EXT);
+
+		SoapySDR::logf(SOAPY_SDR_DEBUG, "SoapyXTRX::SoapyXTRX() set ref to external clock");
 	}
 }
 
 SoapyXTRX::~SoapyXTRX(void)
 {
-	xtrx_close(_dev);
 }
 
 /*******************************************************************
@@ -57,12 +90,12 @@ SoapyXTRX::~SoapyXTRX(void)
  ******************************************************************/
 std::string SoapyXTRX::getDriverKey(void) const
 {
-	return "xtrx";
+	return "xtrxsoapy";
 }
 
 std::string SoapyXTRX::getHardwareKey(void) const
 {
-	return "/dev/xtrx0";
+	return "xtrxdev";
 }
 
 SoapySDR::Kwargs SoapyXTRX::getHardwareInfo(void) const
@@ -106,7 +139,7 @@ std::vector<std::string> SoapyXTRX::listAntennas(const int direction, const size
 
 void SoapyXTRX::setAntenna(const int direction, const size_t channel, const std::string &name)
 {
-	std::unique_lock<std::recursive_mutex> lock(_accessMutex);
+	std::unique_lock<std::recursive_mutex> lock(_dev->accessMutex);
 	SoapySDR::logf(SOAPY_SDR_DEBUG, "SoapyXTRX::setAntenna(%d, %s)", int(channel), name.c_str());
 	xtrx_antenna_t a;
 
@@ -130,7 +163,7 @@ void SoapyXTRX::setAntenna(const int direction, const size_t channel, const std:
 		throw std::runtime_error("SoapyXTRX::setAntenna(?)");
 	}
 
-	int res = xtrx_set_antenna(_dev, a);
+	int res = xtrx_set_antenna(_dev->dev(), a);
 	if (res) {
 		throw std::runtime_error("SoapyXTRX::setAntenna(TX, "+name+") xtrx_set_antenna() err");
 	}
@@ -138,7 +171,7 @@ void SoapyXTRX::setAntenna(const int direction, const size_t channel, const std:
 
 std::string SoapyXTRX::getAntenna(const int direction, const size_t /*channel*/) const
 {
-	std::unique_lock<std::recursive_mutex> lock(_accessMutex);
+	std::unique_lock<std::recursive_mutex> lock(_dev->accessMutex);
 	if (direction == SOAPY_SDR_RX)
 	{
 		switch (_rx_ant)
@@ -174,7 +207,7 @@ bool SoapyXTRX::hasDCOffsetMode(const int direction, const size_t /*channel*/) c
 
 void SoapyXTRX::setDCOffsetMode(const int direction, const size_t /*channel*/, const bool /*automatic*/)
 {
-	std::unique_lock<std::recursive_mutex> lock(_accessMutex);
+	std::unique_lock<std::recursive_mutex> lock(_dev->accessMutex);
 	if (direction == SOAPY_SDR_RX) {
 		//rfic->SetRxDCRemoval(automatic);
 	}
@@ -182,7 +215,7 @@ void SoapyXTRX::setDCOffsetMode(const int direction, const size_t /*channel*/, c
 
 bool SoapyXTRX::getDCOffsetMode(const int direction, const size_t /*channel*/) const
 {
-	std::unique_lock<std::recursive_mutex> lock(_accessMutex);
+	std::unique_lock<std::recursive_mutex> lock(_dev->accessMutex);
 	if (direction == SOAPY_SDR_RX) {
 		// return rfic->GetRxDCRemoval();
 	}
@@ -197,7 +230,7 @@ bool SoapyXTRX::hasDCOffset(const int direction, const size_t /*channel*/) const
 
 void SoapyXTRX::setDCOffset(const int direction, const size_t /*channel*/, const std::complex<double> &/*offset*/)
 {
-	std::unique_lock<std::recursive_mutex> lock(_accessMutex);
+	std::unique_lock<std::recursive_mutex> lock(_dev->accessMutex);
 	if (direction == SOAPY_SDR_TX) {
 		//rfic->SetTxDCOffset(offset.real(), offset.imag());
 	}
@@ -205,7 +238,7 @@ void SoapyXTRX::setDCOffset(const int direction, const size_t /*channel*/, const
 
 std::complex<double> SoapyXTRX::getDCOffset(const int /*direction*/, const size_t /*channel*/) const
 {
-	std::unique_lock<std::recursive_mutex> lock(_accessMutex);
+	std::unique_lock<std::recursive_mutex> lock(_dev->accessMutex);
 	double I = 0.0, Q = 0.0;
 	//if (direction == SOAPY_SDR_TX) rfic->GetTxDCOffset(I, Q);
 	return std::complex<double>(I, Q);
@@ -223,7 +256,7 @@ void SoapyXTRX::setIQBalance(const int /*direction*/, const size_t /*channel*/, 
 
 std::complex<double> SoapyXTRX::getIQBalance(const int /*direction*/, const size_t /*channel*/) const
 {
-	std::unique_lock<std::recursive_mutex> lock(_accessMutex);
+	std::unique_lock<std::recursive_mutex> lock(_dev->accessMutex);
 	return std::complex<double>(0,0);
 }
 
@@ -249,13 +282,14 @@ std::vector<std::string> SoapyXTRX::listGains(const int direction, const size_t 
 
 void SoapyXTRX::setGain(const int direction, const size_t channel, const double value)
 {
-	std::unique_lock<std::recursive_mutex> lock(_accessMutex);
+	std::unique_lock<std::recursive_mutex> lock(_dev->accessMutex);
 	xtrx_channel_t chan = to_xtrx_channels(channel);
+	SoapySDR::logf(SOAPY_SDR_FATAL /*SOAPY_SDR_DEBUG(*/, "SoapyXTRX::setGain(, %d, --, %g dB)", int(channel), value);
 
 	if (direction == SOAPY_SDR_RX)
 	{
 		double actual;
-		xtrx_set_gain(_dev, chan, XTRX_RX_LNA_GAIN, value, &actual);
+		xtrx_set_gain(_dev->dev(), chan, XTRX_RX_LNA_GAIN, value, &actual);
 	}
 
 	else SoapySDR::Device::setGain(direction, channel, value);
@@ -263,31 +297,31 @@ void SoapyXTRX::setGain(const int direction, const size_t channel, const double 
 
 void SoapyXTRX::setGain(const int direction, const size_t channel, const std::string &name, const double value)
 {
-	std::unique_lock<std::recursive_mutex> lock(_accessMutex);
-	SoapySDR::logf(SOAPY_SDR_DEBUG, "SoapyXTRX::setGain(, %d, %s, %g dB)", int(channel), name.c_str(), value);
+	std::unique_lock<std::recursive_mutex> lock(_dev->accessMutex);
+	SoapySDR::logf(SOAPY_SDR_FATAL /*SOAPY_SDR_DEBUG(*/, "SoapyXTRX::setGain(, %d, %s, %g dB)", int(channel), name.c_str(), value);
 
 	xtrx_channel_t chan = to_xtrx_channels(channel);
     if (direction == SOAPY_SDR_RX and (name == "LNA" || name == "LB"))
 	{
-		xtrx_set_gain(_dev, chan, XTRX_RX_LNA_GAIN, value, &_actual_rx_gain_lna[channel]);
+		xtrx_set_gain(_dev->dev(), chan, XTRX_RX_LNA_GAIN, value, &_actual_rx_gain_lna[channel]);
 		return;
 	}
 
 	else if (direction == SOAPY_SDR_RX and name == "TIA")
 	{
-		xtrx_set_gain(_dev, chan, XTRX_RX_TIA_GAIN, value, &_actual_rx_gain_tia[channel]);
+		xtrx_set_gain(_dev->dev(), chan, XTRX_RX_TIA_GAIN, value, &_actual_rx_gain_tia[channel]);
 		return;
 	}
 
 	else if (direction == SOAPY_SDR_RX and name == "PGA")
 	{
-		xtrx_set_gain(_dev, chan, XTRX_RX_PGA_GAIN, value, &_actual_rx_gain_pga[channel]);
+		xtrx_set_gain(_dev->dev(), chan, XTRX_RX_PGA_GAIN, value, &_actual_rx_gain_pga[channel]);
 		return;
 	}
 
 	else if (direction == SOAPY_SDR_TX and name == "PAD")
 	{
-		xtrx_set_gain(_dev, chan, XTRX_TX_PAD_GAIN, value, &_actual_tx_gain_pad[channel]);
+		xtrx_set_gain(_dev->dev(), chan, XTRX_TX_PAD_GAIN, value, &_actual_tx_gain_pad[channel]);
 	}
 
 	else throw std::runtime_error("SoapyXTRX::setGain("+name+") - unknown gain name");
@@ -297,7 +331,7 @@ void SoapyXTRX::setGain(const int direction, const size_t channel, const std::st
 
 double SoapyXTRX::getGain(const int direction, const size_t channel, const std::string &name) const
 {
-	std::unique_lock<std::recursive_mutex> lock(_accessMutex);
+	std::unique_lock<std::recursive_mutex> lock(_dev->accessMutex);
 	to_xtrx_channels(channel);
 
     if (direction == SOAPY_SDR_RX and (name == "LNA" || name == "LB"))
@@ -364,7 +398,7 @@ SoapySDR::ArgInfoList SoapyXTRX::getFrequencyArgsInfo(const int direction, const
 void SoapyXTRX::setFrequency(const int direction, const size_t channel, const std::string &name, const double frequency, const SoapySDR::Kwargs &/*args*/)
 {
 	xtrx_channel_t chan = to_xtrx_channels(channel);
-	std::unique_lock<std::recursive_mutex> lock(_accessMutex);
+	std::unique_lock<std::recursive_mutex> lock(_dev->accessMutex);
 	SoapySDR::logf(SOAPY_SDR_DEBUG, "SoapyXTRX::setFrequency(, %d, %s, %g MHz)", int(channel), name.c_str(), frequency/1e6);
 	int res;
 
@@ -375,9 +409,9 @@ void SoapyXTRX::setFrequency(const int direction, const size_t channel, const st
 		if (targetRfFreq > 3.8e9) targetRfFreq = 3.8e9;
 
 		if (direction == SOAPY_SDR_TX) {
-			res = xtrx_tune(_dev, XTRX_TUNE_TX_FDD, targetRfFreq, &_actual_rf_tx);
+			res = xtrx_tune(_dev->dev(), XTRX_TUNE_TX_FDD, targetRfFreq, &_actual_rf_tx);
 		} else {
-			res = xtrx_tune(_dev, XTRX_TUNE_RX_FDD, targetRfFreq, &_actual_rf_rx);
+			res = xtrx_tune(_dev->dev(), XTRX_TUNE_RX_FDD, targetRfFreq, &_actual_rf_rx);
 		}
 		if (res) {
 			throw std::runtime_error("SoapyXTRX::setFrequency("+name+") unable to tune!");
@@ -387,9 +421,9 @@ void SoapyXTRX::setFrequency(const int direction, const size_t channel, const st
 	else if (name == "BB")
 	{
 		if (direction == SOAPY_SDR_TX) {
-			res = xtrx_tune_ex(_dev, XTRX_TUNE_BB_TX, chan, frequency, &_actual_bb_tx[channel]);
+			res = xtrx_tune_ex(_dev->dev(), XTRX_TUNE_BB_TX, chan, frequency, &_actual_bb_tx[channel]);
 		} else {
-			res = xtrx_tune_ex(_dev, XTRX_TUNE_BB_RX, chan, frequency, &_actual_bb_rx[channel]);
+			res = xtrx_tune_ex(_dev->dev(), XTRX_TUNE_BB_RX, chan, frequency, &_actual_bb_rx[channel]);
 		}
 		if (res) {
 			throw std::runtime_error("SoapyXTRX::setFrequency("+name+") unable to tune!");
@@ -402,7 +436,7 @@ void SoapyXTRX::setFrequency(const int direction, const size_t channel, const st
 double SoapyXTRX::getFrequency(const int direction, const size_t channel, const std::string &name) const
 {
 	to_xtrx_channels(channel);
-	std::unique_lock<std::recursive_mutex> lock(_accessMutex);
+	std::unique_lock<std::recursive_mutex> lock(_dev->accessMutex);
 	if (name == "RF")
 	{
 		if (direction == SOAPY_SDR_TX) {
@@ -433,7 +467,7 @@ std::vector<std::string> SoapyXTRX::listFrequencies(const int /*direction*/, con
 
 SoapySDR::RangeList SoapyXTRX::getFrequencyRange(const int direction, const size_t /*channel*/, const std::string &name) const
 {
-	std::unique_lock<std::recursive_mutex> lock(_accessMutex);
+	std::unique_lock<std::recursive_mutex> lock(_dev->accessMutex);
 	SoapySDR::RangeList ranges;
 	if (name == "RF")
 	{
@@ -442,7 +476,7 @@ SoapySDR::RangeList SoapyXTRX::getFrequencyRange(const int direction, const size
 	else if (name == "BB")
 	{
 		uint64_t out = 0;
-		int res = xtrx_val_get(_dev, (direction == SOAPY_SDR_TX) ? XTRX_TX : XTRX_RX, XTRX_CH_AB, XTRX_LMS7_DATA_RATE, &out);
+		int res = xtrx_val_get(_dev->dev(), (direction == SOAPY_SDR_TX) ? XTRX_TX : XTRX_RX, XTRX_CH_AB, XTRX_LMS7_DATA_RATE, &out);
 		if (res)
 			ranges.push_back(SoapySDR::Range(-0.0, 0.0));
 		else
@@ -464,7 +498,7 @@ SoapySDR::RangeList SoapyXTRX::getFrequencyRange(const int /*direction*/, const 
 
 void SoapyXTRX::setSampleRate(const int direction, const size_t channel, const double rate)
 {
-	std::unique_lock<std::recursive_mutex> lock(_accessMutex);
+	std::unique_lock<std::recursive_mutex> lock(_dev->accessMutex);
 	SoapySDR::logf(SOAPY_SDR_DEBUG, "SoapyXTRX::setSampleRate(%d, %s, %g MHz)", int(channel), (direction == SOAPY_SDR_TX) ? "TX" : "RX", rate/1e6);
 	double master_clock;
 	if (direction == SOAPY_SDR_RX)
@@ -484,7 +518,7 @@ void SoapyXTRX::setSampleRate(const int direction, const size_t channel, const d
 		return;
 	}
 
-	int ret = xtrx_set_samplerate(_dev, 0, _tmp_rx, _tmp_tx,
+	int ret = xtrx_set_samplerate(_dev->dev(), 0, _tmp_rx, _tmp_tx,
 								  0, //XTRX_SAMPLERATE_FORCE_UPDATE,
 								  &master_clock, &_actual_rx_rate, &_actual_tx_rate);
 
@@ -498,7 +532,7 @@ void SoapyXTRX::setSampleRate(const int direction, const size_t channel, const d
 
 double SoapyXTRX::getSampleRate(const int direction, const size_t /*channel*/) const
 {
-	std::unique_lock<std::recursive_mutex> lock(_accessMutex);
+	std::unique_lock<std::recursive_mutex> lock(_dev->accessMutex);
 
 	if (direction == SOAPY_SDR_RX)
 	{
@@ -544,17 +578,17 @@ void SoapyXTRX::setBandwidth(const int direction, const size_t channel, const do
 {
 	if (bw == 0.0) return; //special ignore value
 
-	std::unique_lock<std::recursive_mutex> lock(_accessMutex);
+	std::unique_lock<std::recursive_mutex> lock(_dev->accessMutex);
 	SoapySDR::logf(SOAPY_SDR_DEBUG, "SoapyXTRX::setBandwidth(, %d, %g MHz)",  int(channel), bw/1e6);
 	xtrx_channel_t chan = to_xtrx_channels(channel);
 
 	if (direction == SOAPY_SDR_RX)
 	{
-		xtrx_tune_rx_bandwidth(_dev, chan, bw, &_actual_rx_bandwidth[channel]);
+		xtrx_tune_rx_bandwidth(_dev->dev(), chan, bw, &_actual_rx_bandwidth[channel]);
 	}
 	else if (direction == SOAPY_SDR_TX)
 	{
-		xtrx_tune_tx_bandwidth(_dev, chan, bw, &_actual_tx_bandwidth[channel]);
+		xtrx_tune_tx_bandwidth(_dev->dev(), chan, bw, &_actual_tx_bandwidth[channel]);
 	}
 
 	//restore dc offset mode
@@ -562,7 +596,7 @@ void SoapyXTRX::setBandwidth(const int direction, const size_t channel, const do
 
 double SoapyXTRX::getBandwidth(const int direction, const size_t channel) const
 {
-	std::unique_lock<std::recursive_mutex> lock(_accessMutex);
+	std::unique_lock<std::recursive_mutex> lock(_dev->accessMutex);
 	/*xtrx_channel_t chan = */to_xtrx_channels(channel);
 
 	if (direction == SOAPY_SDR_RX)
@@ -600,18 +634,23 @@ SoapySDR::RangeList SoapyXTRX::getBandwidthRange(const int direction, const size
 
 void SoapyXTRX::setMasterClockRate(const double rate)
 {
-	std::unique_lock<std::recursive_mutex> lock(_accessMutex);
+	std::unique_lock<std::recursive_mutex> lock(_dev->accessMutex);
 	//_ref_clk = rate;
-
-	// xtrx_set_ref_clk(_dev, _ref_clk, _ref_source);
-
+	// xtrx_set_ref_clk(_dev->dev(), _ref_clk, _ref_source);
 	// TODO: get reference clock in case of autodetection
 }
 
 double SoapyXTRX::getMasterClockRate(void) const
 {
-	std::unique_lock<std::recursive_mutex> lock(_accessMutex);
-	return _ref_clk;
+	return 0;
+	//std::unique_lock<std::recursive_mutex> lock(_dev->accessMutex);
+	//int64_t v;
+
+	//int res = xtrx_val_get(_dev->dev(), XTRX_TRX, XTRX_CH_AB, XTRX_REF_REFCLK, &v);
+	//if (res)
+	//	throw std::runtime_error("SoapyXTRX::getMasterClockRate() unable to get master clock!");
+
+	//return v;
 }
 
 SoapySDR::RangeList SoapyXTRX::getMasterClockRates(void) const
@@ -629,7 +668,7 @@ std::vector<std::string> SoapyXTRX::listClockSources(void) const
 
 void SoapyXTRX::setClockSource(const std::string &source)
 {
-	std::unique_lock<std::recursive_mutex> lock(_accessMutex);
+	std::unique_lock<std::recursive_mutex> lock(_dev->accessMutex);
 	if (source == "internal")
 		_ref_source = XTRX_CLKSRC_INT;
 	else if (source == "extrernal")
@@ -639,7 +678,7 @@ void SoapyXTRX::setClockSource(const std::string &source)
 	else
 		return;
 
-	xtrx_set_ref_clk(_dev, _ref_clk, _ref_source);
+	xtrx_set_ref_clk(_dev->dev(), _ref_clk, _ref_source);
 }
 
 std::string SoapyXTRX::getClockSource(void) const
@@ -734,7 +773,7 @@ SoapySDR::ArgInfo SoapyXTRX::getSensorInfo(const std::string &name) const
 
 std::string SoapyXTRX::readSensor(const std::string &name) const
 {
-	std::unique_lock<std::recursive_mutex> lock(_accessMutex);
+	std::unique_lock<std::recursive_mutex> lock(_dev->accessMutex);
 	int res = 0;
 	uint64_t val;
 	if (name == "clock_locked")
@@ -747,7 +786,7 @@ std::string SoapyXTRX::readSensor(const std::string &name) const
 	}
 	else if (name == "board_temp")
 	{
-		res = xtrx_val_get(_dev, XTRX_TRX, XTRX_CH_AB, XTRX_BOARD_TEMP, &val);
+		res = xtrx_val_get(_dev->dev(), XTRX_TRX, XTRX_CH_AB, XTRX_BOARD_TEMP, &val);
 		if (res)
 			throw std::runtime_error("SoapyXTRX::readSensor("+name+") error: " + std::to_string(res));
 
@@ -780,7 +819,7 @@ SoapySDR::ArgInfo SoapyXTRX::getSensorInfo(const int /*direction*/, const size_t
 
 std::string SoapyXTRX::readSensor(const int /*direction*/, const size_t /*channel*/, const std::string &name) const
 {
-	std::unique_lock<std::recursive_mutex> lock(_accessMutex);
+	std::unique_lock<std::recursive_mutex> lock(_dev->accessMutex);
 
 	if (name == "lo_locked")
 	{
@@ -840,7 +879,7 @@ void SoapyXTRX::writeSetting(const int direction, const size_t channel,
 	(void)key;
 	(void)value;
 
-	std::unique_lock<std::recursive_mutex> lock(_accessMutex);
+	std::unique_lock<std::recursive_mutex> lock(_dev->accessMutex);
 	throw std::runtime_error("unknown setting key: "+key);
 }
 
@@ -956,7 +995,7 @@ SoapySDR::Stream *SoapyXTRX::setupStream(
 		const SoapySDR::Kwargs &args)
 {
 	//TODO: multi stream
-	std::unique_lock<std::recursive_mutex> lock(_accessMutex);
+	std::unique_lock<std::recursive_mutex> lock(_dev->accessMutex);
 	xtrx_run_stream_params_t *params;
 	size_t num_channels = channels.size();
 	if (num_channels < 1)
@@ -970,7 +1009,7 @@ SoapySDR::Stream *SoapyXTRX::setupStream(
 		params = &_stream_params.rx;
 		_rx_channels = num_channels;
 
-		xtrx_stop(_dev, XTRX_RX);
+		xtrx_stop(_dev->dev(), XTRX_RX);
 	} else if (direction == SOAPY_SDR_TX) {
 		if (_tx_stream != SS_NONE) {
 			std::runtime_error("SoapyXTRX::setupStream(TX) stream is already allocated");
@@ -979,7 +1018,7 @@ SoapySDR::Stream *SoapyXTRX::setupStream(
 		params = &_stream_params.tx;
 		_tx_channels = num_channels;
 
-		xtrx_stop(_dev, XTRX_TX);
+		xtrx_stop(_dev->dev(), XTRX_TX);
 	} else {
 		throw std::runtime_error("SoapyXTRX::setupStream(?) unsupported direction");
 	}
@@ -1066,7 +1105,7 @@ void SoapyXTRX::closeStream(SoapySDR::Stream *stream)
 {
 	//TODO: multi stream
 	(void)stream;
-	std::unique_lock<std::recursive_mutex> lock(_accessMutex);
+	std::unique_lock<std::recursive_mutex> lock(_dev->accessMutex);
 }
 
 size_t SoapyXTRX::getStreamMTU(SoapySDR::Stream *stream) const
@@ -1087,7 +1126,7 @@ int SoapyXTRX::activateStream(
 		throw std::runtime_error("SoapyXTRX::activateStream() - too much packet size");
 	}
 
-	std::unique_lock<std::recursive_mutex> lock(_accessMutex);
+	std::unique_lock<std::recursive_mutex> lock(_dev->accessMutex);
 
 	if (stream == STREAM_RX) {
 		if (_rx_stream != SS_ALOCATED)
@@ -1101,7 +1140,7 @@ int SoapyXTRX::activateStream(
 		if (flags & SOAPY_SDR_HAS_TIME) {
 			_stream_params.rx_stream_start = (master_ts)SoapySDR::timeNsToTicks(timeNs, _actual_rx_rate);
 		} else {
-			_stream_params.rx_stream_start = 4096;
+			_stream_params.rx_stream_start = 32768;
 		}
 		_stream_params.rx.paketsize = (uint16_t)numElems;
 		_stream_params.dir = XTRX_RX;
@@ -1119,14 +1158,14 @@ int SoapyXTRX::activateStream(
 		if (flags & SOAPY_SDR_HAS_TIME) {
 			_tx_internal = SoapySDR::timeNsToTicks(timeNs, _actual_tx_rate);
 		} else {
-			_tx_internal = 4096*1024;
+			_tx_internal = 32768;
 		}
 	} else {
 		throw std::runtime_error("SoapyXTRX::activateStream() - incorrect stream");
 	}
 
 	_stream_params.nflags = 0;
-	int res = xtrx_run_ex(_dev, &_stream_params);
+	int res = xtrx_run_ex(_dev->dev(), &_stream_params);
 	if (res == 0) {
 		if (stream == STREAM_RX) {
 			_rx_stream = SS_ACTIVATED;
@@ -1150,13 +1189,13 @@ int SoapyXTRX::deactivateStream(
 	(void)flags;
 	(void)timeNs;
 
-	std::unique_lock<std::recursive_mutex> lock(_accessMutex);
+	std::unique_lock<std::recursive_mutex> lock(_dev->accessMutex);
 
 	if (stream == STREAM_RX) {
 		if (_rx_stream != SS_ACTIVATED)
 			return SOAPY_SDR_STREAM_ERROR;
 
-		xtrx_stop(_dev, XTRX_RX);
+		xtrx_stop(_dev->dev(), XTRX_RX);
 		_rx_stream = SS_ALOCATED;
 
 		return 0;
@@ -1164,7 +1203,7 @@ int SoapyXTRX::deactivateStream(
 		if (_tx_stream != SS_ACTIVATED)
 			return SOAPY_SDR_STREAM_ERROR;
 
-		xtrx_stop(_dev, XTRX_TX);
+		xtrx_stop(_dev->dev(), XTRX_TX);
 		_tx_stream = SS_ALOCATED;
 
 		return 0;
@@ -1196,7 +1235,7 @@ int SoapyXTRX::readStream(
 	rex.buffers = buffs;
 	rex.flags = RCVEX_DONT_INSER_ZEROS; //RCVEX_EXTRA_LOG;
 
-	int res = xtrx_recv_sync_ex(_dev, &rex);
+	int res = xtrx_recv_sync_ex(_dev->dev(), &rex);
 	if (res) {
 		SoapySDR::logf(SOAPY_SDR_INFO, "SoapyXTRX::readStream(%d) res = %d", numElems, res);
 	}
@@ -1225,19 +1264,24 @@ int SoapyXTRX::writeStream(
 	long long ts = (flags & SOAPY_SDR_HAS_TIME) ?
 				SoapySDR::timeNsToTicks(timeNs, _actual_tx_rate) : _tx_internal;
 
+	unsigned toSend = numElems;
+
 	xtrx_send_ex_info_t nfo;
 	nfo.buffer_count = _tx_channels;
 	nfo.buffers = buffs;
 	nfo.flags = 0;
-	nfo.samples = numElems;
-	nfo.ts = ts;
-	int res = xtrx_send_sync_ex(_dev, &nfo);
+	nfo.samples = toSend;
+	nfo.ts = 2*ts;
+	nfo.timeout = timeoutUs / 1000;
+
+	//std::cerr << "SAMPLES: " << numElems << " TS:" << ts <<std::endl;
+	int res = xtrx_send_sync_ex(_dev->dev(), &nfo);
 
 	if (~(flags & SOAPY_SDR_HAS_TIME)) {
-		_tx_internal += numElems;
+		_tx_internal += toSend;
 	}
 
-	return (res) ? SOAPY_SDR_TIMEOUT : numElems;
+	return (res) ? SOAPY_SDR_TIMEOUT : toSend;
 }
 
 int SoapyXTRX::readStreamStatus(

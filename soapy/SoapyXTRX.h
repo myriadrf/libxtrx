@@ -3,8 +3,33 @@
 #include <chrono>
 #include <map>
 #include <set>
+#include <memory>
 
 #include "../xtrx_api.h"
+
+
+class XTRXHandle
+{
+public:
+	mutable std::recursive_mutex accessMutex;
+
+	struct xtrx_dev* dev() { return _dev; }
+	operator struct xtrx_dev* () { return _dev; }
+
+	unsigned count() { return devcnt; }
+
+	XTRXHandle() = delete;
+	XTRXHandle(const std::string& name);
+	~XTRXHandle();
+
+	static std::shared_ptr<XTRXHandle> get(const std::string& name);
+
+protected:
+	struct xtrx_dev* _dev = NULL;
+	unsigned devcnt;
+
+	static std::map<std::string, std::weak_ptr<XTRXHandle>> s_created;
+};
 
 class SoapyXTRX : public SoapySDR::Device
 {
@@ -256,9 +281,7 @@ private:
 private:
 	enum { MAX_CHANNELS = 2 };
 
-    mutable std::recursive_mutex _accessMutex;
-
-	xtrx_dev* _dev = NULL;
+	std::shared_ptr<XTRXHandle> _dev;
 
 	double _tmp_rx = 0;
 	double _tmp_tx = 0;

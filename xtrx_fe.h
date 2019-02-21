@@ -21,6 +21,7 @@
 #define XTRX_FE_H
 
 #include <xtrxll_api.h>
+#include "xtrx_api.h"
 
 // General abstraction layer of anlog to digital path and wise versa
 
@@ -150,9 +151,15 @@ struct xtrx_fe_ops
 	int (*fe_deinit)(struct xtrx_fe_obj* obj);
 };
 
-int xtrx_fe_init(struct xtrxll_dev* lldev,
-				 unsigned flags,
-				 struct xtrx_fe_obj** obj);
+#define GET_DEV_FROM_FLAGS(f)  ((f) & 0xff)
+enum {
+	XTRX_FE_MASTER           = 0x1000,
+};
 
+int xtrx_fe_init(struct xtrx_dev* dev,
+				 struct xtrxll_dev* lldev,
+				 unsigned flags,
+				 const char* opts,
+				 struct xtrx_fe_obj** obj);
 
 #endif //XTRX_FE_H
