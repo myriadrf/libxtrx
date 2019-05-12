@@ -2012,13 +2012,14 @@ static int _xtrx_gpio_configure(struct xtrx_dev* dev,
 		dev->gpio_cfg_dir = 0;
 		for (unsigned i = 0; i < XTRX_GPIOS_TOTAL; i++) {
 			dev->gpio_cfg_funcs |= gfunc << (2 * i);
-			dev->gpio_cfg_dir |=  dir << (2 * i);
+			dev->gpio_cfg_dir |=  dir << (i);
 		}
 	} else {
 		unsigned msk = 0x3U << (2 * gpio_num);
+		unsigned msk_dir = 0x1U << (gpio_num);
 
 		dev->gpio_cfg_funcs = (~msk & dev->gpio_cfg_funcs) | (gfunc << (2 * gpio_num));
-		dev->gpio_cfg_dir = (~msk & dev->gpio_cfg_dir) | (dir << (2 * gpio_num));
+		dev->gpio_cfg_dir = (~msk_dir & dev->gpio_cfg_dir) | (dir << (gpio_num));
 	}
 
 	res = xtrxll_set_param(dev->lldev, XTRXLL_PARAM_GPIO_DIR, dev->gpio_cfg_dir);
