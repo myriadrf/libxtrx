@@ -27,6 +27,8 @@ public:
 	RxThread(MainWindow *parent = 0);
 	~RxThread();
 
+	static const int MAX_DEVS = 16;
+
 	void run();
 
 	unsigned fft_skip;

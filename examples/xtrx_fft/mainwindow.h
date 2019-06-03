@@ -23,6 +23,8 @@
 #include <QMainWindow>
 #include <QThread>
 #include <xtrx_api.h>
+#include "../../octo/xtrx_octo_api.h"
+#include <vector>
 
 namespace Ui {
 class MainWindow;
@@ -33,6 +35,7 @@ class MainWindow : public QMainWindow
 {
     Q_OBJECT
 
+	static const int MAX_DEVS = 8;
 public:
     explicit MainWindow(QWidget *parent = 0);
     ~MainWindow();
@@ -40,15 +43,15 @@ public:
 
 	QVector<double> x;
 
-	QVector<double> y1;
-	QVector<double> y2;
-	QVector<double> y3;
-	QVector<double> y4;
+	QVector<double> y1[MAX_DEVS];
+	QVector<double> y2[MAX_DEVS];
+	QVector<double> y3[MAX_DEVS];
+	QVector<double> y4[MAX_DEVS];
 
-	QVector<double> z1;
-	QVector<double> z2;
-	QVector<double> z3;
-	QVector<double> z4;
+	QVector<double> z1[MAX_DEVS];
+	QVector<double> z2[MAX_DEVS];
+	QVector<double> z3[MAX_DEVS];
+	QVector<double> z4[MAX_DEVS];
 
 	xtrx_dev* dev;
 
@@ -63,6 +66,9 @@ public slots:
 	void on_btStartStop_clicked();
 	void on_rescale_clicked();
 	void on_max_clicked();
+
+	void on_cbcal_clicked();
+	void on_calFreq_valueChanged(double);
 
 	void on_freq_valueChanged(double);
 	void on_bw_valueChanged(double);
@@ -79,6 +85,7 @@ public:
 //private:
     Ui::MainWindow *ui;
 	RxThread* rx_thread;
+	int       devices;
 };
 
 #endif // MAINWINDOW_H

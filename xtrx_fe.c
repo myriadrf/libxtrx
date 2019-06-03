@@ -31,6 +31,11 @@ int lms7octo_init(struct xtrxll_dev* lldev,
 				  const char* fename,
 				  struct xtrx_fe_obj** obj);
 
+int lms7octocal_init(struct xtrxll_dev* lldev,
+					 unsigned flags,
+					 const char* fename,
+					 struct xtrx_fe_obj** obj);
+
 int auto_init(struct xtrxll_dev* lldev,
 			  unsigned flags,
 			  const char* fename,
@@ -61,6 +66,7 @@ int xtrx_fe_init(struct xtrx_dev* dev,
 				 struct xtrx_fe_obj** obj)
 {
 	const struct fe_dictionary fes[] = {
+		{ "octoCAL", lms7octocal_init },
 		{ "octoRFX6", lms7octo_init },
 		{ "lms7", lms7nfe_init },
 		{ "auto", auto_init }

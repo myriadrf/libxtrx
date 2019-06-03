@@ -107,7 +107,7 @@ XTRX_API int xtrx_open_multi(const xtrx_open_multi_info_t* dinfo, struct xtrx_de
 /** Open XTRX device form semicolon separated device list
  * @param paramstring  Path to XTRX devices, semicolon separated followed by double semicolon and flags
  * @param[out] dev  XTRX device handle
- * @return number of devices on success, errno on error
+ * @return number of devices on success, -errno on error
  *
  * String should not contain any whitespaces, all names should be in ASCII with
  * ending 0 character
@@ -227,6 +227,9 @@ typedef enum xtrx_tune {
 
 	/** Tune baseband (DSP) frequency for TX */
 	XTRX_TUNE_BB_TX,
+
+	/** Extrenal FE frequency tune */
+	XTRX_TUNE_EXT_FE,
 } xtrx_tune_t;
 
 XTRX_API int xtrx_tune(struct xtrx_dev* dev, xtrx_tune_t type, double freq, double *actualfreq);
@@ -587,6 +590,8 @@ typedef enum xtrx_val {
 	/* Direct access to RFIC regs, xtrx_direction_t ignored and chan
 	 *  is used as index to RFIC onboard */
 	XTRX_RFIC_REG_0 = 0x10000000,
+
+	/* External front-end custom registers & control */
 	XTRX_FE_CUSTOM_0 = 0x20000000,
 
 	/* For internal use only */

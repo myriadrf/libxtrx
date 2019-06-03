@@ -60,14 +60,17 @@ void RxThread::run()
 	const unsigned max_samples = 8192;
 
 	union {
-		uint64_t tmp_buffer[max_samples];
-		uint16_t tmp_buffer2[max_samples * 4];
+		uint64_t tmp_buffer[max_samples * MAX_DEVS];
+		uint16_t tmp_buffer2[max_samples * 4 * MAX_DEVS];
 	};
 	xtrx_recv_ex_info_t rx_nfo;
-	void *buffers[] = {tmp_buffer};
+	void *buffers[MAX_DEVS];
+	for (int i = 0; i < MAX_DEVS; ++i) {
+		buffers[i] = &tmp_buffer[max_samples * i];
+	}
 
 	rx_nfo.samples = (soft_ampl_calc) ? 2*max_samples : 4*max_samples;
-	rx_nfo.buffer_count = 1;
+	rx_nfo.buffer_count = _wnd->devices;
 	rx_nfo.buffers = buffers;
 	rx_nfo.flags = RCVEX_DONT_INSER_ZEROS;
 	rx_nfo.timeout = 1000;
@@ -86,11 +89,6 @@ void RxThread::run()
 	bool clear = true;
 
 	for (unsigned k = 0; !isInterruptionRequested(); k++) {
-		QVector<double>* py[] = {&_wnd->y1, &_wnd->y2, &_wnd->y3, &_wnd->y4};
-		QVector<double>* pz[] = {&_wnd->z1, &_wnd->z2, &_wnd->z3, &_wnd->z4};
-		QVector<double>& y = *py[vd];
-		QVector<double>& z = *pz[vd];
-
 		unsigned skip = *(volatile unsigned*)&fft_skip;
 		unsigned avg = *(volatile unsigned*)&fft_avg;
 		if (avg > MAX_AVG)
@@ -102,6 +100,12 @@ void RxThread::run()
 		if (res) {
 			return;
 		}
+
+		for (int d = 0; d < _wnd->devices; ++d) {
+			QVector<double>* py[] = {&_wnd->y1[d], &_wnd->y2[d], &_wnd->y3[d], &_wnd->y4[d]};
+			QVector<double>* pz[] = {&_wnd->z1[d], &_wnd->z2[d], &_wnd->z3[d], &_wnd->z4[d]};
+			QVector<double>& y = *(py[vd]);
+			QVector<double>& z = *(pz[vd]);
 
 		/*
 		if (calc_max && clear) {
@@ -145,7 +149,7 @@ void RxThread::run()
 		if (soft_ampl_calc) {
 			for (n = 0; n < avg; n++) {
 				for (unsigned i=0; i<512; ++i) {
-					uint64_t v = tmp_buffer[512 * n + reverse512(i)];
+					uint64_t v = tmp_buffer[max_samples * d + 512 * n + reverse512(i)];
 
 					uint16_t ai = (v >> 0)  & 0xffff;
 					uint16_t bi = (v >> 16) & 0xffff;
@@ -175,7 +179,7 @@ void RxThread::run()
 
 			for (n = 0; n < avg; n++) {
 				for (unsigned i=0; i<512; ++i) {
-					uint16_t v = tmp_buffer2[512 * n + reverse512(i)];
+					uint16_t v = tmp_buffer2[max_samples * 4 * d + 512 * n + reverse512(i)];
 					int q = ((int)v) - 65535;
 
 					int j = (i + 256) % 512;
@@ -194,7 +198,7 @@ void RxThread::run()
 				double mulc = 10.0 / 1024 / log2(10);
 				for (; n <MAX_AVG;n++) {
 					for (unsigned i=0; i<512; ++i) {
-						uint16_t v = tmp_buffer2[512 * n + reverse512(i)];
+						uint16_t v = tmp_buffer2[max_samples * 4 * d + 512 * n + reverse512(i)];
 						int q = ((int)v) - 65535;
 
 						int j = (i + 256) % 512;
@@ -208,6 +212,7 @@ void RxThread::run()
 				}
 
 			}
+		}
 		}
 
 		emit newRxData(vd);

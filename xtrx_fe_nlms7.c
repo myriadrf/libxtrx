@@ -1080,7 +1080,6 @@ int lms7nfe_dd_set_modes(struct xtrx_fe_obj* obj,
 						const struct xtrx_dd_params *params)
 {
 	struct xtrx_nfe_lms7 *dev = (struct xtrx_nfe_lms7 *)obj;
-
 	switch (op) {
 	case XTRX_FEDD_CONFIGURE:
 		return lms7nfe_dd_configure(dev, params);
@@ -1191,6 +1190,9 @@ int lms7nfe_bb_set_badwidth(struct xtrx_fe_obj* obj,
 		if (dir == XTRX_TUNE_BB_RX) {
 			bparam_set_val(&dev->rx_bw[(j == LMS7_CH_A) ? 0 : 1], bw);
 
+//			res = lms7_rbb_set_ext(&dev->lms_state);
+#if 1
+
 			///////////////// FIXMEEEEEEEEEE!!!!!!!!!!!!!!!!!!!!!!!!
 			res = lms7_rbb_set_path(&dev->lms_state, RBB_LBF);
 			if (res)
@@ -1199,6 +1201,7 @@ int lms7nfe_bb_set_badwidth(struct xtrx_fe_obj* obj,
 			res = lms7_rbb_set_bandwidth(&dev->lms_state, bw);
 			if (actualbw)
 				*actualbw = bw;
+#endif
 		} else if (dir == XTRX_TUNE_BB_TX) {
 			bparam_set_val(&dev->tx_bw[(j == LMS7_CH_A) ? 0 : 1], bw);
 

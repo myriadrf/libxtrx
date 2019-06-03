@@ -735,6 +735,7 @@ int xtrx_tune_ex(struct xtrx_dev* dev, xtrx_tune_t type, xtrx_channel_t ch,
 	case XTRX_TUNE_RX_FDD:
 	case XTRX_TUNE_TX_FDD:
 	case XTRX_TUNE_TX_AND_RX_TDD:
+	case XTRX_TUNE_EXT_FE:
 		if (!dev->refclock_checked) {
 			res = xtrx_set_ref_clk(dev, 0, dev->clock_source);
 			if (res)
@@ -1850,7 +1851,7 @@ got_buffer:
 static int _xtrx_val_set_int(struct xtrx_dev* dev, xtrx_direction_t dir,
 				 xtrx_channel_t chan, xtrx_val_t type, uint64_t val)
 {
-	if (type >= XTRX_RFIC_REG_0 && type <= XTRX_RFIC_REG_0 + 65535)	{
+	if (type >= XTRX_RFIC_REG_0 && type < XTRX_DEBUG_0)	{
 		XTRXLLS_LOG("XTRX", XTRXLL_INFO, "%s: FE REG %x %x\n",
 					_devname(dev), type, val);
 		return dev->fe->ops->set_reg(dev->fe, chan, dir, type, val);
@@ -1902,7 +1903,7 @@ static int _xtrx_val_get_int(struct xtrx_dev* dev, xtrx_direction_t dir,
 {
 	int res, val;
 
-	if (type >= XTRX_RFIC_REG_0 && type <= XTRX_RFIC_REG_0 + 65535)	{
+	if (type >= XTRX_RFIC_REG_0 && type < XTRX_DEBUG_0)	{
 		return dev->fe->ops->get_reg(dev->fe, chan, dir, type, oval);
 	};
 

@@ -28,29 +28,33 @@
 MainWindow::MainWindow(QWidget *parent) :
     QMainWindow(parent),
 	x(512),
-	y1(512),
-	y2(512),
-	y3(512),
-	y4(512),
-	z1(512),
-	z2(512),
-	z3(512),
-	z4(512),
-
 	ui(new Ui::MainWindow)
 {
     ui->setupUi(this);
 	dev = NULL;
 
 	QCustomPlot* customPlot = ui->widget;
+
+	Qt::GlobalColor clrs[8] = {
+		Qt::blue,	Qt::red,	Qt::green,	Qt::lightGray,
+		Qt::cyan,	Qt::magenta,Qt::yellow,	Qt::darkGray,
+	};
+
+	Qt::GlobalColor mclrs[8] = {
+		Qt::darkBlue,	Qt::darkRed,	Qt::darkGreen,	Qt::gray,
+		Qt::darkCyan,	Qt::darkMagenta,Qt::darkYellow,	Qt::black,
+	};
+
 	// add two new graphs and set their look:
-	customPlot->addGraph();
-	customPlot->graph(0)->setPen(QPen(Qt::blue)); // line color blue for first graph
+	for (int i = 0; i < MAX_DEVS; ++i) {
+		customPlot->addGraph();
+		customPlot->graph(i)->setPen(QPen(clrs[i])); // line color blue for first graph
+	}
 
-	customPlot->addGraph();
-	customPlot->graph(1)->setPen(QPen(Qt::red)); // line color blue for first graph
-
-	//customPlot->graph(0)->setBrush(QBrush(QColor(0, 0, 255, 20))); // first graph will be filled with translucent blue
+	for (int i = 0; i < MAX_DEVS; ++i) {
+		customPlot->addGraph();
+		customPlot->graph(MAX_DEVS + i)->setPen(QPen(mclrs[i])); // line color blue for first graph
+	}
 
 	connect(customPlot->xAxis, SIGNAL(rangeChanged(QCPRange)), customPlot->xAxis2, SLOT(setRange(QCPRange)));
 	connect(customPlot->yAxis, SIGNAL(rangeChanged(QCPRange)), customPlot->yAxis2, SLOT(setRange(QCPRange)));
@@ -73,6 +77,8 @@ MainWindow::MainWindow(QWidget *parent) :
 	connect(rx_thread, SIGNAL(newRxData(int)), this, SLOT(redraw(int)));
 
 	update_devs();
+
+	xtrx_log_setlevel(3, "DEF");
 }
 
 void MainWindow::update_devs()
@@ -99,13 +105,15 @@ void MainWindow::redraw(int idx)
 	else if (idx < 0)
 		idx = 0;
 
-	QVector<double>* py[] = {&y1, &y2, &y3, &y4};
-	QVector<double>* pz[] = {&z1, &z2, &z3, &z4};
+	for (int i = 0; i < devices; i++) {
+		QVector<double>* py[] = {&y1[i], &y2[i], &y3[i], &y4[i]};
+		QVector<double>* pz[] = {&z1[i], &z2[i], &z3[i], &z4[i]};
 
-	customPlot->graph(0)->setData(x, *py[idx]);
+		customPlot->graph(i)->setData(x, *py[idx]);
 
-	if (draw_max) {
-		customPlot->graph(1)->setData(x, *pz[idx]);
+		if (draw_max) {
+			customPlot->graph(MAX_DEVS + i)->setData(x, *pz[idx]);
+		}
 	}
 
 #if defined(QCUSTOMPLOT_VERSION) && (QCUSTOMPLOT_VERSION >= 0x020000)
@@ -118,9 +126,11 @@ void MainWindow::redraw(int idx)
 
 void MainWindow::on_rescale_clicked()
 {
-	ui->widget->graph(0)->rescaleAxes();
-	if (draw_max) {
-		ui->widget->graph(1)->rescaleAxes(true);
+	for (int i = 0; i < devices; i++) {
+		ui->widget->graph(i)->rescaleAxes();
+		if (draw_max) {
+			ui->widget->graph(MAX_DEVS + i)->rescaleAxes(true);
+		}
 	}
 
 	int ymax = 65535 + ui->widget->yAxis->range().upper * 1024 * log2(10) / 10;
@@ -133,7 +143,7 @@ void MainWindow::on_rescale_clicked()
 
 void MainWindow::on_lna_currentIndexChanged(int idx)
 {
-	xtrx_antenna_t a[] = { XTRX_RX_AUTO, XTRX_RX_L, XTRX_RX_W, XTRX_RX_H };
+	xtrx_antenna_t a[] = { XTRX_RX_AUTO, XTRX_RX_L, XTRX_RX_W, XTRX_RX_H, XTRX_RX_ADC_EXT };
 	xtrx_set_antenna(dev, a[idx]);
 }
 
@@ -149,9 +159,25 @@ void MainWindow::on_btStartStop_clicked()
 		ui->widget->graph(1)->data()->clear();
 
 		ui->statusbar->showMessage(QString("Samplerate %1 MSPS Gain: %2").arg(samplerate).arg(gain));
-		res = xtrx_open(devstr.toLatin1(), 4, &dev);
-		if (res)
+		//res = xtrx_open(devstr.toLatin1(), 4, &dev);
+		res = xtrx_open_string(devstr.toLatin1(), &dev);
+		if (res < 0)
 			goto failed;
+		devices = res;
+		const int FFT_SIZE = 512;
+		for (int i = 0; i < devices; ++i) {
+			y1[i].resize(FFT_SIZE);
+			y2[i].resize(FFT_SIZE);
+			y3[i].resize(FFT_SIZE);
+			y4[i].resize(FFT_SIZE);
+
+			z1[i].resize(FFT_SIZE);
+			z2[i].resize(FFT_SIZE);
+			z3[i].resize(FFT_SIZE);
+			z4[i].resize(FFT_SIZE);
+		}
+
+		//rx_thread->dev_cnt = res;
 
 		res = xtrx_set_samplerate(dev, 0, samplerate, 0, 0, NULL, NULL, NULL);
 		if (res)
@@ -174,22 +200,22 @@ void MainWindow::on_btStartStop_clicked()
 			params.dir = XTRX_RX;
 			params.rx_stream_start = 8192;
 			params.nflags = 0;
-			params.rx.chs = XTRX_CH_AB;
+			params.rx.chs = XTRX_CH_ALL;
 			params.rx.flags = 0;
 			params.rx.hfmt = XTRX_IQ_INT16;
 			params.rx.wfmt = XTRX_WF_16;
 			params.rx.paketsize = 8192;
-			params.rx.flags = XTRX_STREAMDSP_1;
+			params.rx.flags = XTRX_STREAMDSP_1 | (ui->cbb->isChecked() ? XTRX_RSP_SWAP_AB : 0);
 		} else {
 			params.dir = XTRX_RX;
 			params.rx_stream_start = 32768;
 			params.nflags = 0;
-			params.rx.chs = XTRX_CH_AB;
+			params.rx.chs = XTRX_CH_ALL;
 			params.rx.flags = 0;
 			params.rx.hfmt = XTRX_IQ_INT8;
 			params.rx.wfmt = XTRX_WF_8;
 			params.rx.paketsize = 0;
-			params.rx.flags = XTRX_RSP_SISO_MODE | XTRX_STREAMDSP_2;
+			params.rx.flags = XTRX_RSP_SISO_MODE | XTRX_STREAMDSP_2 | (ui->cbb->isChecked() ? XTRX_RSP_SWAP_AB : 0);
 		}
 		res = xtrx_run_ex(dev, &params);
 		if (res)
@@ -252,7 +278,7 @@ void MainWindow::on_bw_valueChanged(double bw)
 	if (dev == NULL)
 		return;
 
-	int res = xtrx_tune_rx_bandwidth(dev, XTRX_CH_A, bw * 1e6, NULL);
+	int res = xtrx_tune_rx_bandwidth(dev, XTRX_CH_ALL, bw * 1e6, NULL);
 	if (res) {
 		ui->statusbar->showMessage(QString("Failed to set bw to %1 (%2) errno %3").arg(bw).arg(strerror(-res)).arg(res));
 	}
@@ -263,7 +289,7 @@ void MainWindow::on_gain_valueChanged(int gain)
 	if (dev == NULL)
 		return;
 
-	int res = xtrx_set_gain(dev, XTRX_CH_A, XTRX_RX_LNA_GAIN, gain, 0);
+	int res = xtrx_set_gain(dev, XTRX_CH_ALL, XTRX_RX_LNA_GAIN, gain, 0);
 	if (res) {
 		ui->statusbar->showMessage(QString("Failed to set gain to %1 (%2) errno %3").arg(gain).arg(strerror(-res)).arg(res));
 	}
@@ -289,7 +315,29 @@ void MainWindow::on_throttle_valueChanged(int skip)
 		reg |= (1 << 16) | ((skip - 1) & 0xFF);
 	}
 
-	xtrx_val_set(dev, XTRX_TRX, XTRX_CH_AB, XTRX_DSPFE_CMD, reg);
+	xtrx_val_set(dev, XTRX_TRX, XTRX_CH_ALL, XTRX_DSPFE_CMD, reg);
+}
+
+void MainWindow::on_cbcal_clicked()
+{
+	if (dev == NULL)
+		return;
+
+	int res = xtrx_octo_set_cal_path(dev, ui->cbcal->isChecked());
+	if (res) {
+		ui->statusbar->showMessage(QString("Failed switch CAL to %1 errno %2").arg(strerror(-res)).arg(res));
+	}
+}
+
+void MainWindow::on_calFreq_valueChanged(double freq)
+{
+	if (dev == NULL)
+		return;
+
+	int res = xtrx_tune(dev, XTRX_TUNE_EXT_FE, freq * 1e6, NULL);
+	if (res) {
+		ui->statusbar->showMessage(QString("Failed to tune to %1 (%2) errno %3").arg(freq).arg(strerror(-res)).arg(res));
+	}
 }
 
 void MainWindow::wf_add_point(int x, unsigned data)
