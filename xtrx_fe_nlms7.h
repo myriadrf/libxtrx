@@ -64,6 +64,9 @@ struct xtrx_nfe_lms7
 	struct lml_map maprx;
 	struct lml_map maptx;
 
+	struct xtrx_dd_chpar chprx;
+	struct xtrx_dd_chpar chptx;
+
 	enum lml_mode lml_mode;
 	unsigned lml_txdiv;
 	unsigned lml_rxdiv;

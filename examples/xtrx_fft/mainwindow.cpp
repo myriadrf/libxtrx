@@ -22,6 +22,7 @@
 
 #include <QTimer>
 #include <QDebug>
+#include <unistd.h>
 
 #include "rxthread.h"
 
@@ -178,6 +179,9 @@ void MainWindow::on_btStartStop_clicked()
 		}
 
 		//rx_thread->dev_cnt = res;
+		res = xtrx_set_ref_clk(dev, 0, ui->cbe->isChecked() ? XTRX_CLKSRC_EXT : XTRX_CLKSRC_INT);
+		if (res)
+			goto failed_freq;
 
 		res = xtrx_set_samplerate(dev, 0, samplerate, 0, 0, NULL, NULL, NULL);
 		if (res)
@@ -215,7 +219,7 @@ void MainWindow::on_btStartStop_clicked()
 			params.rx.hfmt = XTRX_IQ_INT8;
 			params.rx.wfmt = XTRX_WF_8;
 			params.rx.paketsize = 0;
-			params.rx.flags = XTRX_RSP_SISO_MODE | XTRX_STREAMDSP_2 | (ui->cbb->isChecked() ? XTRX_RSP_SWAP_AB : 0);
+			params.rx.flags = XTRX_RSP_SISO_SWITCH | XTRX_RSP_SISO_MODE | XTRX_STREAMDSP_2 | (ui->cbb->isChecked() ? XTRX_RSP_SWAP_AB : 0);
 		}
 		res = xtrx_run_ex(dev, &params);
 		if (res)
@@ -223,6 +227,8 @@ void MainWindow::on_btStartStop_clicked()
 
 		ui->smaplerate->setEnabled(false);
 		ui->softlog->setEnabled(false);
+		ui->cbe->setEnabled(false);
+		//ui->cbb->setEnabled(false);
 		ui->btStartStop->setText(tr("Stop"));
 
 		on_throttle_valueChanged(ui->throttle->value());
@@ -234,6 +240,7 @@ void MainWindow::on_btStartStop_clicked()
 		if (!(rx_thread->wait(1000))) {
 			rx_thread->terminate();
 		}
+		usleep(1000);
 		xtrx_stop(dev, XTRX_TRX);
 		xtrx_close(dev);
 		dev = NULL;
@@ -241,6 +248,8 @@ void MainWindow::on_btStartStop_clicked()
 
 		ui->smaplerate->setEnabled(true);
 		ui->softlog->setEnabled(true);
+		ui->cbe->setEnabled(true);
+		//ui->cbb->setEnabled(true);
 		ui->btStartStop->setText(tr("Start"));
 
 		ui->waterfall->stop();
@@ -260,6 +269,16 @@ void MainWindow::on_max_clicked()
 {
 	draw_max = ui->max->isChecked();
 	rx_thread->calc_max = draw_max;
+}
+
+void MainWindow::on_cbb_clicked()
+{
+	uint64_t val = ui->cbb->isChecked() ? 1 : 0;
+	if (dev == NULL)
+		return;
+
+	xtrx_val_set(dev, XTRX_TRX, XTRX_CH_ALL,
+				 (xtrx_val_t)(XTRX_FE_CUSTOM_0 + 2), val);
 }
 
 void MainWindow::on_freq_valueChanged(double freq)

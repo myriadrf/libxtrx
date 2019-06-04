@@ -325,6 +325,7 @@ typedef enum xtrx_run_sp_flags {
 	XTRX_STREAMDSP_2        = 1024,
 
 	XTRX_RSP_SWAP_IQA       = 2048, /* swap IQ only in one channel A */
+	XTRX_RSP_SISO_SWITCH    = 4096,
 } xtrx_run_sp_flags_t;
 
 typedef struct xtrx_run_stream_params {

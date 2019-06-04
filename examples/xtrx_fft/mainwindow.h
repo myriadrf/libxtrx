@@ -68,6 +68,8 @@ public slots:
 	void on_max_clicked();
 
 	void on_cbcal_clicked();
+	void on_cbb_clicked();
+
 	void on_calFreq_valueChanged(double);
 
 	void on_freq_valueChanged(double);

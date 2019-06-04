@@ -829,7 +829,7 @@ static unsigned _ulog(unsigned d)
 static enum lms7_mac_mode _corr_ch(enum lms7_mac_mode mode,
 								   unsigned flags)
 {
-	if (mode == LMS7_CH_AB && (flags & XTRX_RSP_SISO_MODE)) {
+	if (mode == LMS7_CH_AB && (flags & XTRX_RSP_SISO_MODE) && (!(flags & XTRX_RSP_SISO_SWITCH))) {
 		if (flags & XTRX_RSP_SWAP_AB) {
 			mode = LMS7_CH_B;
 		} else {
@@ -859,7 +859,8 @@ int lms7nfe_dd_configure(struct xtrx_nfe_lms7* dev,
 			return -EINVAL;
 		}
 		rx_lmschan = _corr_ch(rx_lmschan, params->rx.flags);
-		dev->maprx = lms7nfe_get_lml_portcfg(&params->rx, dev->rx_no_siso_map);
+		dev->chprx = params->rx;
+		dev->maprx = lms7nfe_get_lml_portcfg(&dev->chprx, dev->rx_no_siso_map);
 
 		rxafen_a = rx_lmschan != LMS7_CH_B;
 		rxafen_b = rx_lmschan != LMS7_CH_A;
@@ -869,7 +870,8 @@ int lms7nfe_dd_configure(struct xtrx_nfe_lms7* dev,
 			return -EINVAL;
 		}
 		tx_lmschan = _corr_ch(tx_lmschan, params->tx.flags);
-		dev->maptx = lms7nfe_get_lml_portcfg(&params->tx, dev->tx_no_siso_map);
+		dev->chptx = params->tx;
+		dev->maptx = lms7nfe_get_lml_portcfg(&dev->chptx, dev->tx_no_siso_map);
 
 		txafen_a = tx_lmschan != LMS7_CH_B;
 		txafen_b = tx_lmschan != LMS7_CH_A;
@@ -1486,6 +1488,28 @@ int lms7nfe_set_reg(struct xtrx_fe_obj* obj,
 	case XTRX_FE_CUSTOM_0 + 1:
 		dev->txant = val & 1;
 		return xtrxll_set_param(dev->lldev, XTRXLL_PARAM_SWITCH_TX_ANT, dev->txant);
+
+	case XTRX_FE_CUSTOM_0 + 2:
+		if (val) {
+			dev->chprx.flags |= XTRX_RSP_SWAP_AB;
+		} else {
+			dev->chprx.flags &= ~XTRX_RSP_SWAP_AB;
+		}
+		dev->maprx = lms7nfe_get_lml_portcfg(&dev->chprx, dev->rx_no_siso_map);
+		return lms7_lml_set_map(&dev->lms_state,
+								dev->rx_port_1 ? dev->maprx : dev->maptx,
+								dev->rx_port_1 ? dev->maptx : dev->maprx);
+
+	case XTRX_FE_CUSTOM_0 + 3:
+		if (val) {
+			dev->chptx.flags |= XTRX_RSP_SWAP_AB;
+		} else {
+			dev->chptx.flags &= ~XTRX_RSP_SWAP_AB;
+		}
+		dev->maptx = lms7nfe_get_lml_portcfg(&dev->chptx, dev->tx_no_siso_map);
+		return lms7_lml_set_map(&dev->lms_state,
+								dev->rx_port_1 ? dev->maprx : dev->maptx,
+								dev->rx_port_1 ? dev->maptx : dev->maprx);
 
 	default:
 		if (type >= XTRX_RFIC_REG_0 && type <= XTRX_RFIC_REG_0 + 65535)	{

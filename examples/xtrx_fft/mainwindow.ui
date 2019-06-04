@@ -6,7 +6,7 @@
    <rect>
     <x>0</x>
     <y>0</y>
-    <width>1941</width>
+    <width>1993</width>
     <height>600</height>
    </rect>
   </property>
@@ -50,6 +50,16 @@
          </property>
          <property name="text">
           <string>B</string>
+         </property>
+        </widget>
+       </item>
+       <item>
+        <widget class="QCheckBox" name="cbe">
+         <property name="toolTip">
+          <string>Use external REF clock</string>
+         </property>
+         <property name="text">
+          <string>E</string>
          </property>
         </widget>
        </item>
@@ -303,7 +313,7 @@
     <rect>
      <x>0</x>
      <y>0</y>
-     <width>1941</width>
+     <width>1993</width>
      <height>34</height>
     </rect>
    </property>
