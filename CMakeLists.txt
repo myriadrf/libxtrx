@@ -79,6 +79,7 @@ find_package(libxtrxll REQUIRED)
 
 include_directories(${LIBXTRXDSP_INCLUDE_DIRS})
 include_directories(${LIBXTRXLL_INCLUDE_DIRS})
+include_directories(${CMAKE_CURRENT_SOURCE_DIR})
 
 
 if(LMS_FE_OLD)
