@@ -362,7 +362,8 @@ SoapySDR::Range SoapyXTRX::getGainRange(const int direction, const size_t channe
 	if (direction == SOAPY_SDR_RX)
 	{
 		//make it so gain of 0.0 sets PGA at its mid-range
-		return SoapySDR::Range(-12.0, 19.0+12.0+30.0);
+		//return SoapySDR::Range(-12.0, 19.0+12.0+30.0); //Fix me: -12.0 as minimum causes bad calculation
+		return SoapySDR::Range(0, 19.0+12.0+30.0); 
 	}
 	return SoapySDR::Device::getGainRange(direction, channel);
 }
