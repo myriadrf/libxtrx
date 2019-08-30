@@ -6,7 +6,7 @@
 #include <memory>
 
 #include "../xtrx_api.h"
-
+#include "../xtrx_lms7_api.h"
 
 class XTRXHandle
 {

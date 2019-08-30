@@ -476,7 +476,7 @@ SoapySDR::RangeList SoapyXTRX::getFrequencyRange(const int direction, const size
 	else if (name == "BB")
 	{
 		uint64_t out = 0;
-		int res = xtrx_val_get(_dev->dev(), (direction == SOAPY_SDR_TX) ? XTRX_TX : XTRX_RX, XTRX_CH_AB, XTRX_LMS7_DATA_RATE, &out);
+		int res = xtrx_val_get(_dev->dev(), (direction == SOAPY_SDR_TX) ? XTRX_TX : XTRX_RX, XTRX_CH_AB, (xtrx_val_t)XTRX_LMS7_DATA_RATE, &out);
 		if (res)
 			ranges.push_back(SoapySDR::Range(-0.0, 0.0));
 		else
