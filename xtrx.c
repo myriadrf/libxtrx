@@ -1870,8 +1870,6 @@ static int _xtrx_val_set_int(struct xtrx_dev* dev, xtrx_direction_t dir,
 	case XTRX_LMS7_VIO:
 		XTRXLLS_LOG("XTRX", XTRXLL_INFO, "%s: Set LMS7 VIO to %d\n", _devname(dev), (int)val);
 		return xtrxll_set_param(dev->lldev, XTRXLL_PARAM_PWR_VIO, val);
-	case XTRX_LMS7_XSP_DC_IQ:
-		return dev->fe->ops->set_reg(dev->fe, chan, dir, type, val);
 	case XTRX_VCTCXO_DAC_VAL:
 		XTRXLLS_LOG("XTRX", XTRXLL_INFO, "%s: Set XTRX DAC %d\n", _devname(dev), (int)val);
 		return xtrxll_set_param(dev->lldev, XTRXLL_PARAM_REF_DAC, val);
@@ -1937,9 +1935,6 @@ static int _xtrx_val_get_int(struct xtrx_dev* dev, xtrx_direction_t dir,
 		}
 		*oval = dev->refclock;
 		return 0;
-	case XTRX_LMS7_DATA_RATE:
-	case XTRX_LMS7_RSSI:
-		return dev->fe->ops->get_reg(dev->fe, chan, dir, type, oval);
 	case XTRX_PERF_LLFIFO:
 		if (dir == XTRX_RX) {
 			res = xtrxll_get_sensor(dev->lldev, XTRXLL_DMABUF_RXST64K, &val);
