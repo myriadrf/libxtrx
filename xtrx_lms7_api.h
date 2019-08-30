@@ -1,0 +1,32 @@
+#ifndef XTRX_LMS7_API_H
+#define XTRX_LMS7_API_H
+
+/** @file xtrx_lms7_api.h
+ *
+ * XTRX LSM7 specific function (non portable)
+ */
+
+#include <xtrx_api.h>
+
+enum xtrx_val_lms7 {
+    XTRX_LMS7_RX_ANT_SWITCH = XTRX_FE_CUSTOM_0 + 0,
+    XTRX_LMS7_TX_ANT_SWITCH = XTRX_FE_CUSTOM_0 + 1,
+    XTRX_LMS7_RX_SWPAB_FLAG = XTRX_FE_CUSTOM_0 + 2,
+    XTRX_LMS7_TX_SWPAB_FLAG = XTRX_FE_CUSTOM_0 + 3,
+
+    XTRX_LMS7_DATA_RATE     = XTRX_FE_CUSTOM_0 + 4,
+    XTRX_LMS7_XSP_DC_IQ     = XTRX_FE_CUSTOM_0 + 5,
+    XTRX_LMS7_RSSI          = XTRX_FE_CUSTOM_0 + 6,
+    XTRX_LMS7_DCOFF_CORR    = XTRX_FE_CUSTOM_0 + 7,
+
+    XTRX_LMS7_XTSP_IQGCORR  = XTRX_FE_CUSTOM_0 + 8,
+    XTRX_LMS7_XTSP_IQPHCORR = XTRX_FE_CUSTOM_0 + 9,
+    XTRX_LMS7_RX_ANT_DIS    = XTRX_FE_CUSTOM_0 + 10,
+    XTRX_LMS7_RF_LB         = XTRX_FE_CUSTOM_0 + 11,
+
+};
+
+
+
+#endif // XTRX_LMS7_API_H
+
