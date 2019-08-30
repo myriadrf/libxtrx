@@ -6,7 +6,7 @@
    <rect>
     <x>0</x>
     <y>0</y>
-    <width>1993</width>
+    <width>2130</width>
     <height>600</height>
    </rect>
   </property>
@@ -86,7 +86,7 @@
           <double>30.000000000000000</double>
          </property>
          <property name="maximum">
-          <double>3700.000000000000000</double>
+          <double>3800.000000000000000</double>
          </property>
          <property name="singleStep">
           <double>0.100000000000000</double>
@@ -128,6 +128,16 @@
        </item>
        <item>
         <widget class="QSpinBox" name="gain">
+         <property name="maximum">
+          <number>31</number>
+         </property>
+         <property name="value">
+          <number>15</number>
+         </property>
+        </widget>
+       </item>
+       <item>
+        <widget class="QSpinBox" name="bgain">
          <property name="maximum">
           <number>31</number>
          </property>
@@ -183,6 +193,21 @@
            <string>ADC</string>
           </property>
          </item>
+         <item>
+          <property name="text">
+           <string>LNAL_LB</string>
+          </property>
+         </item>
+         <item>
+          <property name="text">
+           <string>LNAW_LB</string>
+          </property>
+         </item>
+         <item>
+          <property name="text">
+           <string>LNAH_LB</string>
+          </property>
+         </item>
         </widget>
        </item>
        <item>
@@ -197,6 +222,13 @@
           </size>
          </property>
         </spacer>
+       </item>
+       <item>
+        <widget class="QCheckBox" name="cbAntD">
+         <property name="text">
+          <string>D</string>
+         </property>
+        </widget>
        </item>
        <item>
         <widget class="QCheckBox" name="cbcal">
@@ -216,10 +248,91 @@
         </widget>
        </item>
        <item>
-        <widget class="QCheckBox" name="softlog">
+        <widget class="QCheckBox" name="softfft">
          <property name="text">
-          <string>S10</string>
+          <string>FFTW</string>
          </property>
+        </widget>
+       </item>
+       <item>
+        <widget class="QComboBox" name="fft_size">
+         <property name="currentIndex">
+          <number>3</number>
+         </property>
+         <item>
+          <property name="text">
+           <string>64</string>
+          </property>
+         </item>
+         <item>
+          <property name="text">
+           <string>128</string>
+          </property>
+         </item>
+         <item>
+          <property name="text">
+           <string>256</string>
+          </property>
+         </item>
+         <item>
+          <property name="text">
+           <string>512</string>
+          </property>
+         </item>
+         <item>
+          <property name="text">
+           <string>1024</string>
+          </property>
+         </item>
+         <item>
+          <property name="text">
+           <string>2048</string>
+          </property>
+         </item>
+         <item>
+          <property name="text">
+           <string>4096</string>
+          </property>
+         </item>
+         <item>
+          <property name="text">
+           <string>8192</string>
+          </property>
+         </item>
+         <item>
+          <property name="text">
+           <string>16384</string>
+          </property>
+         </item>
+        </widget>
+       </item>
+       <item>
+        <widget class="QComboBox" name="fft_wnd">
+         <item>
+          <property name="text">
+           <string>NONE</string>
+          </property>
+         </item>
+         <item>
+          <property name="text">
+           <string>Hann</string>
+          </property>
+         </item>
+         <item>
+          <property name="text">
+           <string>Hamming</string>
+          </property>
+         </item>
+         <item>
+          <property name="text">
+           <string>Blackman</string>
+          </property>
+         </item>
+         <item>
+          <property name="text">
+           <string>Nuttall</string>
+          </property>
+         </item>
         </widget>
        </item>
        <item>
@@ -249,10 +362,10 @@
           <number>1</number>
          </property>
          <property name="maximum">
-          <number>64</number>
+          <number>4096</number>
          </property>
          <property name="value">
-          <number>16</number>
+          <number>256</number>
          </property>
         </widget>
        </item>
@@ -264,22 +377,113 @@
         </widget>
        </item>
        <item>
-        <widget class="QSpinBox" name="fft_skip">
-         <property name="maximum">
-          <number>1024</number>
-         </property>
-         <property name="value">
-          <number>0</number>
-         </property>
-        </widget>
-       </item>
-       <item>
         <widget class="QSpinBox" name="throttle">
          <property name="maximum">
           <number>256</number>
          </property>
          <property name="value">
           <number>16</number>
+         </property>
+        </widget>
+       </item>
+      </layout>
+     </widget>
+    </item>
+    <item>
+     <widget class="QFrame" name="frame_2">
+      <property name="frameShape">
+       <enum>QFrame::StyledPanel</enum>
+      </property>
+      <property name="frameShadow">
+       <enum>QFrame::Raised</enum>
+      </property>
+      <layout class="QHBoxLayout" name="horizontalLayout_2">
+       <item>
+        <widget class="QDoubleSpinBox" name="txFreq">
+         <property name="decimals">
+          <number>3</number>
+         </property>
+         <property name="minimum">
+          <double>30.000000000000000</double>
+         </property>
+         <property name="maximum">
+          <double>3800.000000000000000</double>
+         </property>
+         <property name="singleStep">
+          <double>0.100000000000000</double>
+         </property>
+        </widget>
+       </item>
+       <item>
+        <widget class="QComboBox" name="txband">
+         <item>
+          <property name="text">
+           <string>AUTO</string>
+          </property>
+         </item>
+         <item>
+          <property name="text">
+           <string>B1-H/W</string>
+          </property>
+         </item>
+         <item>
+          <property name="text">
+           <string>B2-L</string>
+          </property>
+         </item>
+        </widget>
+       </item>
+       <item>
+        <widget class="QLabel" name="label_6">
+         <property name="text">
+          <string>BW</string>
+         </property>
+        </widget>
+       </item>
+       <item>
+        <widget class="QDoubleSpinBox" name="txbw">
+         <property name="minimum">
+          <double>0.500000000000000</double>
+         </property>
+         <property name="maximum">
+          <double>160.000000000000000</double>
+         </property>
+         <property name="singleStep">
+          <double>0.100000000000000</double>
+         </property>
+        </widget>
+       </item>
+       <item>
+        <widget class="QCheckBox" name="rf_lb">
+         <property name="text">
+          <string>RF_LB</string>
+         </property>
+        </widget>
+       </item>
+       <item>
+        <widget class="QDoubleSpinBox" name="lb_attn">
+         <property name="maximum">
+          <double>41.000000000000000</double>
+         </property>
+        </widget>
+       </item>
+       <item>
+        <spacer name="horizontalSpacer_2">
+         <property name="orientation">
+          <enum>Qt::Horizontal</enum>
+         </property>
+         <property name="sizeHint" stdset="0">
+          <size>
+           <width>40</width>
+           <height>20</height>
+          </size>
+         </property>
+        </spacer>
+       </item>
+       <item>
+        <widget class="QPushButton" name="cal_rxdc">
+         <property name="text">
+          <string>RXDC</string>
          </property>
         </widget>
        </item>
@@ -313,7 +517,7 @@
     <rect>
      <x>0</x>
      <y>0</y>
-     <width>1993</width>
+     <width>2130</width>
      <height>34</height>
     </rect>
    </property>

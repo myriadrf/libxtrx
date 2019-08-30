@@ -14,6 +14,7 @@ find_package(Qt5Widgets CONFIG REQUIRED)
 find_package(Qt5PrintSupport CONFIG REQUIRED)
 find_package(QCustomPlot CONFIG REQUIRED)
 find_package(LibXTRX REQUIRED)
+find_package(FFTW)
 
 # Populate a CMake variable with the sources
 set(mainwindow_SRCS
@@ -24,8 +25,14 @@ set(mainwindow_SRCS
     main.cpp
 )
 
+if(FFTW_FOUND)
+    list(APPEND mainwindow_SRCS fftwthread.cpp)
+    add_definitions("-DWITH_FFTW")
+    include_directories(${FFTW_INCLUDE_DIRS})
+endif(FFTW_FOUND)
+
 include_directories(${LIBXTRX_INCLUDE_DIRS})
 
 add_executable(xtrx_fft ${mainwindow_SRCS})
-target_link_libraries(xtrx_fft Qt5::Widgets Qt5::PrintSupport ${QCustomPlot_LIBRARIES} ${LIBXTRX_LIBRARIES})
+target_link_libraries(xtrx_fft Qt5::Widgets Qt5::PrintSupport ${QCustomPlot_LIBRARIES} ${LIBXTRX_LIBRARIES} xtrxdsp ${FFTW_LIBRARIES})
 install(TARGETS xtrx_fft DESTINATION ${XTRX_UTILS_DIR})

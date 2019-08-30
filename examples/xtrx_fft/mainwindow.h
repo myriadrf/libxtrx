@@ -26,20 +26,45 @@
 #include "../../octo/xtrx_octo_api.h"
 #include <vector>
 
+
+class MainWindow;
 namespace Ui {
 class MainWindow;
 }
 
-class RxThread;
+class FFTThread : public QThread
+{
+	Q_OBJECT
+public:
+	FFTThread(MainWindow *parent = 0);
+	virtual ~FFTThread() {}
+
+	static const int MAX_DEVS = 16;
+
+	unsigned fft_avg;
+	bool calc_max;
+
+signals:
+	void newRxData(int);
+
+protected:
+	MainWindow* _wnd;
+};
+
+
+
 class MainWindow : public QMainWindow
 {
     Q_OBJECT
 
 	static const int MAX_DEVS = 8;
+	static const int MAX_WNDS = 5;
 public:
     explicit MainWindow(QWidget *parent = 0);
     ~MainWindow();
 
+
+	QVector<float> wnd[MAX_WNDS];
 
 	QVector<double> x;
 
@@ -53,7 +78,12 @@ public:
 	QVector<double> z3[MAX_DEVS];
 	QVector<double> z4[MAX_DEVS];
 
+	double dc_pwr[MAX_DEVS];
+	float wnd_p_corr[MAX_WNDS];
+
 	xtrx_dev* dev;
+
+	unsigned cwnd;
 
 	bool draw_max;
 
@@ -61,6 +91,7 @@ public:
 	void wf_feed_line();
 
 	void update_devs();
+	void update_wnds();
 public slots:
 	void redraw(int);
 	void on_btStartStop_clicked();
@@ -70,24 +101,41 @@ public slots:
 	void on_cbcal_clicked();
 	void on_cbb_clicked();
 
+	void on_cbAntD_clicked();
+
+	void on_rf_lb_clicked();
+
+	void on_cal_rxdc_clicked();
+
 	void on_calFreq_valueChanged(double);
 
 	void on_freq_valueChanged(double);
+	void on_txFreq_valueChanged(double);
+
 	void on_bw_valueChanged(double);
+	void on_txbw_valueChanged(double);
+
+	void on_lb_attn_valueChanged(double);
+
 	void on_gain_valueChanged(int);
+	void on_bgain_valueChanged(int);
 
 	void on_fft_avg_valueChanged(int);
-	void on_fft_skip_valueChanged(int);
 
 	void on_lna_currentIndexChanged(int);
+	void on_txband_currentIndexChanged(int);
+	void on_fft_wnd_currentIndexChanged(int);
 
 	void on_throttle_valueChanged(int);
 
 public:
 //private:
     Ui::MainWindow *ui;
-	RxThread* rx_thread;
-	int       devices;
+	FFTThread* rx_thread;
+	int        devices;
+	unsigned   max_ffts;
+	int        fft_size;
 };
+
 
 #endif // MAINWINDOW_H

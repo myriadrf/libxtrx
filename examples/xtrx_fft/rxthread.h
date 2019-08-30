@@ -20,25 +20,11 @@
 #include "mainwindow.h"
 
 
-class RxThread : public QThread
+class RxThread : public FFTThread
 {
-	Q_OBJECT
 public:
 	RxThread(MainWindow *parent = 0);
-	~RxThread();
-
-	static const int MAX_DEVS = 16;
+	~RxThread() {}
 
 	void run();
-
-	unsigned fft_skip;
-	unsigned fft_avg;
-	bool soft_ampl_calc;
-	bool calc_max;
-
-signals:
-	void newRxData(int);
-
-protected:
-	MainWindow* _wnd;
 };
