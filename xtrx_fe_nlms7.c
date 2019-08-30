@@ -29,7 +29,7 @@
 
 #include "xtrx_api.h"
 #include "xtrx_fe_nlms7.h"
-
+#include "xtrx_lms7_api.h"
 
 enum {
 	MIN_TX_RATE = 2100000, /* 2.1e6 Minimum samplerate supported by the XTRX hardware */
@@ -121,8 +121,9 @@ int lms7_spi_post(struct lms7_state* s, const unsigned count, const uint32_t* re
 
 
 
-static int _xtrx_set_lna_rx(struct xtrx_nfe_lms7 *dev, int band)
+static int _xtrx_set_lna_rx(struct xtrx_nfe_lms7 *dev)
 {
+	unsigned band = dev->rx_band;
 	XTRXLLS_LOG("LMSF", XTRXLL_INFO, "%s: Set RX band to %d (%c)\n",
 				xtrxll_get_name(dev->lldev), band,
 				band == RFE_LNAW ? 'W' : band == RFE_LNAH ? 'H' : band == RFE_LNAL ? 'L' : '-');
@@ -132,15 +133,17 @@ static int _xtrx_set_lna_rx(struct xtrx_nfe_lms7 *dev, int band)
 	if (res)
 		return res;
 
-	dev->rxant = (band == RFE_LNAW) ? 0 :
+	dev->rxant = (dev->rx_disconnect) ? 3 :
+				 (band == RFE_LNAW) ? 0 :
 				 (band == RFE_LNAH) ? 2 :
 				 (band == RFE_LNAL) ? 1 : 3;
 	return xtrxll_set_param(dev->lldev, XTRXLL_PARAM_SWITCH_RX_ANT, dev->rxant);
 }
 
 
-static int _xtrx_set_lna_tx(struct xtrx_nfe_lms7 *dev, int band)
+static int _xtrx_set_lna_tx(struct xtrx_nfe_lms7 *dev)
 {
+	unsigned band = dev->tx_band;
 	XTRXLLS_LOG("LMSF", XTRXLL_INFO, "%s: Set TX band to %d (%c)\n",
 				xtrxll_get_name(dev->lldev), band, (band == 1) ? 'H' : 'W');
 
@@ -149,7 +152,8 @@ static int _xtrx_set_lna_tx(struct xtrx_nfe_lms7 *dev, int band)
 		return res;
 
 	dev->txant = (band == 1) ? 1 : 0;
-	return xtrxll_set_param(dev->lldev, XTRXLL_PARAM_SWITCH_TX_ANT, dev->txant);
+	return xtrxll_set_param(dev->lldev, XTRXLL_PARAM_SWITCH_TX_ANT,
+							dev->trf_lb_active ? ~dev->txant : dev->txant);
 }
 
 
@@ -169,6 +173,7 @@ const char* get_band_name(unsigned l)
 	case RFE_LNAW: return "LNAW";
 	case RFE_LBW:  return "LBW";
 	case RFE_LBL:  return "LBL";
+	case RFE_LBH:  return "LBH";
 	}
 	return "<unknown>";
 }
@@ -181,39 +186,39 @@ static int _xtrx_signal_event(struct xtrx_nfe_lms7 *dev, enum sigtype t)
 	case XTRX_RX_LO_CHANGED:
 	case XTRX_RX_LNA_CHANGED:
 		if (dev->rx_lna_auto) {
-			int band = (dev->rx_lo > 2200e6) ? RFE_LNAH :
+			dev->rx_band = (dev->rx_lo > 2200e6) ? RFE_LNAH :
 					   (dev->rx_lo > 1500e6) ? RFE_LNAW : RFE_LNAL;
 			XTRXLLS_LOG("LMSF", XTRXLL_INFO, "%s: Auto RX band selection: %s\n",
-						xtrxll_get_name(dev->lldev), get_band_name(band));
+						xtrxll_get_name(dev->lldev), get_band_name(dev->rx_band));
 			res = lms7_mac_set(&dev->lms_state, LMS7_CH_AB);
 			if (res)
 				return res;
-			res = _xtrx_set_lna_rx(dev, band);
+			res = _xtrx_set_lna_rx(dev);
 		}
 		break;
 	case XTRX_TX_LO_CHANGED:
 	case XTRX_TX_LNA_CHANGED:
 		if (dev->tx_lna_auto) {
-			int band = (dev->tx_lo > 2200e6) ? 1 : 2;
+			dev->tx_band = (dev->tx_lo > 2200e6) ? 1 : 2;
+
 			XTRXLLS_LOG("LMSF", XTRXLL_INFO, "%s: Auto TX band selection: %s\n",
 						xtrxll_get_name(dev->lldev),
-						band == 1 ? "H (Band1)" : "W (Band2)");
+						dev->tx_band == 1 ? "H (Band1)" : "W (Band2)");
 			res = lms7_mac_set(&dev->lms_state, LMS7_CH_AB);
 			if (res)
 				return res;
-			res = _xtrx_set_lna_tx(dev, band);
+			res = _xtrx_set_lna_tx(dev);
 		}
 		break;
 	}
 
-	XTRXLLS_LOG("LMSF", XTRXLL_INFO, "%s: DC START\n",
-				xtrxll_get_name(dev->lldev));
-	res = lms7_dc_start(&dev->lms_state,
-						dev->rx_run_a, dev->rx_run_b,
-						dev->tx_run_a, dev->tx_run_b);
-	if (res)
-		return res;
-
+	//XTRXLLS_LOG("LMSF", XTRXLL_INFO, "%s: DC START\n",
+	//			xtrxll_get_name(dev->lldev));
+	//res = lms7_dc_start(&dev->lms_state,
+	//					dev->rx_run_a, dev->rx_run_b,
+	//					dev->tx_run_a, dev->tx_run_b);
+	//if (res)
+	//	return res;
 	//usleep(1000);
 	//lms7_cal_rxdc(&dev->lms_state);
 
@@ -282,9 +287,9 @@ int lms7nfe_init(struct xtrxll_dev* lldev,
 	dev->lldev = lldev;
 	dev->rx_lna_auto = true;
 	dev->tx_lna_auto = true;
+	dev->rx_disconnect = false;
 	dev->rx_lo = 0;
 	dev->tx_lo = 0;
-
 
 	usleep(10000);
 
@@ -871,6 +876,11 @@ int lms7nfe_dd_configure(struct xtrx_nfe_lms7* dev,
 		}
 		tx_lmschan = _corr_ch(tx_lmschan, params->tx.flags);
 		dev->chptx = params->tx;
+
+		// Bug in FPGA image!!!
+		if (!_xtrx_run_params_stream_is_mimo(&dev->chptx)) {
+			dev->chptx.flags ^= XTRX_RSP_SWAP_IQ;
+		}
 		dev->maptx = lms7nfe_get_lml_portcfg(&dev->chptx, dev->tx_no_siso_map);
 
 		txafen_a = tx_lmschan != LMS7_CH_B;
@@ -915,7 +925,7 @@ int lms7nfe_dd_configure(struct xtrx_nfe_lms7* dev,
 								rxafen_a, rxafen_b);
 		if (res)
 			return res;
-		if (~(params->rx.flags & XTRX_RSP_NO_DC_CORR)) {
+		if ((params->rx.flags & XTRX_RSP_NO_DC_CORR) == 0) {
 			res = lms7_rxtsp_dc_corr(&dev->lms_state, 7);
 			if (res)
 				return res;
@@ -1253,17 +1263,20 @@ int lms7nfe_set_gain(struct xtrx_fe_obj* obj,
 		actual = 30 - aret;
 		break;
 	case XTRX_RX_TIA_GAIN:
-		actual = gain;
+		actual = -clamp(gain, -12, 0);
+		res = lms7_rfe_set_tia(&dev->lms_state, gain, &aret);
+		actual = -aret;
 		break;
 	case XTRX_RX_PGA_GAIN:
+		gain = clamp(gain, -12.5, 12.5);
 		actual = gain;
 		res = lms7_rbb_set_pga(&dev->lms_state, gain + 12.5);
 		break;
 	case XTRX_RX_LB_GAIN:
-		actual = gain;
-		res = lms7_rfe_set_lblna(&dev->lms_state, 160 - gain * 4, NULL);
+		gain = -clamp(gain, -40, 0);
+		res = lms7_rfe_set_lblna(&dev->lms_state, gain * 4, &aret);
+		actual = -(double)aret/4.0;
 		break;
-
 	case XTRX_TX_PAD_GAIN:
 		if (gain > 0)
 			gain = 0;
@@ -1373,12 +1386,15 @@ int lms7nfe_fe_set_lna(struct xtrx_fe_obj* obj,
 
 	case XTRX_RX_L_LB: band = RFE_LBL; tx = 0; break;
 	case XTRX_RX_W_LB: band = RFE_LBW; tx = 0; break;
+	case XTRX_RX_H_LB: band = RFE_LBH; tx = 0; break;
 
 	case XTRX_TX_H: band = 1; tx = 1; break;
 	case XTRX_TX_W: band = 2; tx = 1; break;
 
 	case XTRX_RX_AUTO: dev->rx_lna_auto = true; return _xtrx_signal_event(dev, XTRX_RX_LNA_CHANGED);
 	case XTRX_TX_AUTO: dev->tx_lna_auto = true; return _xtrx_signal_event(dev, XTRX_TX_LNA_CHANGED);
+
+	case XTRX_RX_ADC_EXT: break;
 	default: return -EINVAL;
 	}
 
@@ -1386,12 +1402,20 @@ int lms7nfe_fe_set_lna(struct xtrx_fe_obj* obj,
 	if (res)
 		return res;
 
+	if (lna == XTRX_RX_ADC_EXT) {
+		XTRXLLS_LOG("LMSF", XTRXLL_INFO, "%s: Activating external ADC input\n",
+					xtrxll_get_name(dev->lldev));
+		return lms7_rbb_set_ext(&dev->lms_state);
+	}
+
 	if (tx) {
 		dev->tx_lna_auto = false;
-		return _xtrx_set_lna_tx(dev, band);
+		dev->tx_band = band;
+		return _xtrx_set_lna_tx(dev);
 	} else {
 		dev->rx_lna_auto = false;
-		return _xtrx_set_lna_rx(dev, band);
+		dev->rx_band = band;
+		return _xtrx_set_lna_rx(dev);
 	}
 }
 
@@ -1428,10 +1452,10 @@ int lms7nfe_get_reg(struct xtrx_fe_obj* obj,
 			return -EINVAL;
 		}
 		return 0;
-	case XTRX_FE_CUSTOM_0:
+	case XTRX_LMS7_RX_ANT_SWITCH:
 		*outval = (dev->rxant);
 		return 0;
-	case XTRX_FE_CUSTOM_0 + 1:
+	case XTRX_LMS7_TX_ANT_SWITCH:
 		*outval = (dev->txant);
 		return 0;
 	default:
@@ -1468,7 +1492,159 @@ int lms7nfe_set_reg(struct xtrx_fe_obj* obj,
 	}
 
 	switch (type) {
+	case XTRX_LMS7_RF_LB:
+		res = lms7_mac_set(&dev->lms_state, lmsch);
+		if (res)
+			return res;
+
+		if (val && !dev->trf_lb_active) {
+			bool txacta = false;
+			bool txactb = false;
+			if ((lmsch & LMS7_CH_A) && (!dev->tx_run_a)) {
+				txacta = true;
+				txactb = dev->tx_run_b;
+			}
+			if ((lmsch & LMS7_CH_B) && (!dev->tx_run_b)) {
+				txacta = true;
+				txactb = true;
+			}
+			if (txacta) {
+				res = lms7_afe_ctrl(&dev->lms_state,
+									dev->rx_run_a || dev->rx_run_b,
+									dev->rx_run_b,
+									txacta,
+									txactb);
+				if (res)
+					return res;
+
+				res = lms7_trf_enable(&dev->lms_state,
+									  dev->rx_run_a,
+									  dev->rx_run_b);
+				if (res)
+					return res;
+
+				res = lms7_trf_set_padlb(&dev->lms_state, 0, 0);
+				if (res)
+					return res;
+
+				res = lms7_tbb_set_path(&dev->lms_state, TBB_LAD);
+				if (res)
+					return res;
+
+				res = lms7_txtsp_init(&dev->lms_state, 0);
+				if (res)
+					return res;
+			}
+
+			res = lms7_rfe_set_lblna(&dev->lms_state, 0, 0);
+			if (res)
+				return res;
+
+			XTRXLLS_LOG("LMSF", XTRXLL_INFO, "%s: RF Loopback activated\n",
+						xtrxll_get_name(dev->lldev));
+			dev->trf_lb_active = true;
+		} else if (val == 0 && dev->trf_lb_active) {
+			if (!dev->tx_run_a || !dev->tx_run_b) {
+				res = lms7_afe_ctrl(&dev->lms_state,
+									dev->rx_run_a || dev->rx_run_b,
+									dev->rx_run_b,
+									dev->tx_run_a || dev->tx_run_b,
+									dev->tx_run_b);
+				if (res)
+					return res;
+			}
+
+			if (!dev->tx_run_a && !dev->tx_run_b) {
+				res = lms7_txtsp_disable(&dev->lms_state);
+				if (res)
+					return res;
+
+				res = lms7_tbb_disable(&dev->lms_state);
+				if (res)
+					return res;
+
+				res = lms7_trf_disable(&dev->lms_state);
+				if (res)
+					return res;
+			}
+
+			XTRXLLS_LOG("LMSF", XTRXLL_INFO, "%s: RF Loopback deactivated\n",
+						xtrxll_get_name(dev->lldev));
+			dev->trf_lb_active = false;
+		}
+
+		return 0;
+	case XTRX_LMS7_RX_ANT_DIS:
+		dev->rx_disconnect = (val) ? true : false;
+		return _xtrx_set_lna_rx(dev);
+	case XTRX_LMS7_DCOFF_CORR:
+		if (dir & XTRX_TX) {
+			if (lmsch & LMS7_CH_A) {
+				res = lms7_dc_txa_set(&dev->lms_state,
+									  val & 0xffff, (val >> 16) & 0xffff);
+				if (res)
+					return res;
+			}
+			if (lmsch & LMS7_CH_B) {
+				res = lms7_dc_txb_set(&dev->lms_state,
+									  val & 0xffff, (val >> 16) & 0xffff);
+				if (res)
+					return res;
+			}
+		}
+		if (dir & XTRX_RX) {
+			if (lmsch & LMS7_CH_A) {
+				res = lms7_dc_rxa_set(&dev->lms_state,
+									  val & 0xffff, (val >> 16) & 0xffff);
+				if (res)
+					return res;
+			}
+			if (lmsch & LMS7_CH_B) {
+				res = lms7_dc_rxb_set(&dev->lms_state,
+									  val & 0xffff, (val >> 16) & 0xffff);
+				if (res)
+					return res;
+			}
+		}
+	case XTRX_LMS7_XTSP_IQPHCORR:
+		res = lms7_mac_set(&dev->lms_state, lmsch);
+		if (res)
+			return res;
+
+		if (dir & XTRX_TX) {
+			res = lms7_txtsp_iq_phcorr(&dev->lms_state, val & 0xffff);
+			if (res)
+				return res;
+		}
+		if (dir & XTRX_RX) {
+			res = lms7_rxtsp_iq_phcorr(&dev->lms_state, val & 0xffff);
+			if (res)
+				return res;
+		}
+		return 0;
+	case XTRX_LMS7_XTSP_IQGCORR:
+		res = lms7_mac_set(&dev->lms_state, lmsch);
+		if (res)
+			return res;
+
+		if (dir & XTRX_TX) {
+			res = lms7_txtsp_iq_gcorr(&dev->lms_state,
+									  val & 0xffff, (val >> 16) & 0xffff);
+			if (res)
+				return res;
+		}
+		if (dir & XTRX_RX) {
+			res = lms7_rxtsp_iq_gcorr(&dev->lms_state,
+									  val & 0xffff, (val >> 16) & 0xffff);
+			if (res)
+				return res;
+		}
+		return 0;
 	case XTRX_LMS7_XSP_DC_IQ:
+		res = lms7_mac_set(&dev->lms_state, lmsch);
+		if (res)
+			return res;
+
 		if (dir & XTRX_TX) {
 			res = lms7_txtsp_tsg_const(&dev->lms_state,
 									   val & 0xffff, (val >> 16) & 0xffff);
@@ -1482,14 +1658,14 @@ int lms7nfe_set_reg(struct xtrx_fe_obj* obj,
 				return res;
 		}
 		return 0;
-	case XTRX_FE_CUSTOM_0:
+	case XTRX_LMS7_RX_ANT_SWITCH:
 		dev->rxant = val & 3;
 		return xtrxll_set_param(dev->lldev, XTRXLL_PARAM_SWITCH_RX_ANT, dev->rxant);
-	case XTRX_FE_CUSTOM_0 + 1:
+	case XTRX_LMS7_TX_ANT_SWITCH:
 		dev->txant = val & 1;
 		return xtrxll_set_param(dev->lldev, XTRXLL_PARAM_SWITCH_TX_ANT, dev->txant);
 
-	case XTRX_FE_CUSTOM_0 + 2:
+	case XTRX_LMS7_RX_SWPAB_FLAG:
 		if (val) {
 			dev->chprx.flags |= XTRX_RSP_SWAP_AB;
 		} else {
@@ -1500,7 +1676,7 @@ int lms7nfe_set_reg(struct xtrx_fe_obj* obj,
 								dev->rx_port_1 ? dev->maprx : dev->maptx,
 								dev->rx_port_1 ? dev->maptx : dev->maprx);
 
-	case XTRX_FE_CUSTOM_0 + 3:
+	case XTRX_LMS7_TX_SWPAB_FLAG:
 		if (val) {
 			dev->chptx.flags |= XTRX_RSP_SWAP_AB;
 		} else {

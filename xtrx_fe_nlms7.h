@@ -36,6 +36,7 @@ struct xtrx_nfe_lms7
 	bool rx_run_b;
 
 	bool rx_port_1;
+	bool rx_disconnect;
 
 	uint8_t             rx_mmcm_div;
 	uint8_t             tx_mmcm_div;
@@ -44,6 +45,9 @@ struct xtrx_nfe_lms7
 
 	bool                rx_lna_auto;
 	bool                tx_lna_auto;
+
+	uint8_t             rx_band;
+	uint8_t             tx_band;
 
 	unsigned rx_host_decim;
 	unsigned tx_host_inter;
@@ -76,6 +80,8 @@ struct xtrx_nfe_lms7
 
 	xtrx_bparam_t tx_dsp[2];
 	xtrx_bparam_t rx_dsp[2];
+
+	bool trf_lb_active;
 };
 
 
