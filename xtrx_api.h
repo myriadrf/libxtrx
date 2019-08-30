@@ -278,6 +278,8 @@ typedef enum xtrx_antenna {
 	XTRX_TX_AUTO,  // automatic selection
 
 	XTRX_RX_ADC_EXT, // External ADC input
+
+	XTRX_RX_H_LB, // loopback
 } xtrx_antenna_t;
 
 XTRX_API int xtrx_set_antenna(struct xtrx_dev* dev, xtrx_antenna_t antenna);
@@ -557,16 +559,16 @@ typedef enum xtrx_val {
 	XTRX_UNDERLYING_LL = 0,
 
 	/* RFIC specific calibration space */
-	XTRX_RFIC_CORR_DC_EN = 0x1000,
+	//XTRX_RFIC_CORR_DC_EN = 0x1000,
 	//XTRX_RFIC_CORR_DC_IQ,
 	//XTRX_RFIC_CORR_GAIN_IQ,
 
 	/* LMS7 specific values */
-	XTRX_LMS7_XSP_SIGNAL = 0x1700,
-	XTRX_LMS7_XSP_DC_IQ,
-	XTRX_LMS7_RSSI,
-	XTRX_LMS7_TEMP,
-	XTRX_LMS7_DATA_RATE, /**< TSP/RSP data rate for DAC/ADC */
+	//XTRX_LMS7_XSP_SIGNAL = 0x1700,
+	//XTRX_LMS7_XSP_DC_IQ,
+	//XTRX_LMS7_RSSI,
+	//XTRX_LMS7_TEMP,
+	//XTRX_LMS7_DATA_RATE, /**< TSP/RSP data rate for DAC/ADC */
 	XTRX_LMS7_PWR_MODE,
 	XTRX_LMS7_VIO,
 
