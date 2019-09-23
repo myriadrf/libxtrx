@@ -465,7 +465,8 @@ int xtrx_open_string(const char* paramstring, struct xtrx_dev** dev)
 	params.devices = (const char**)ldevices;
 
 	if (paramstring) {
-		strncpy(copypstr, paramstring, sizeof(copypstr));
+		strncpy(copypstr, paramstring, sizeof(copypstr) - 1);
+		copypstr[sizeof(copypstr) - 1] = '\0';
 		devices = copypstr;
 
 		char* separator = strstr(copypstr, ";;");
@@ -1852,7 +1853,7 @@ static int _xtrx_val_set_int(struct xtrx_dev* dev, xtrx_direction_t dir,
 				 xtrx_channel_t chan, xtrx_val_t type, uint64_t val)
 {
 	if (type >= XTRX_RFIC_REG_0 && type < XTRX_DEBUG_0)	{
-		XTRXLLS_LOG("XTRX", XTRXLL_INFO, "%s: FE REG %x %x\n",
+		XTRXLLS_LOG("XTRX", XTRXLL_INFO, "%s: FE REG %x " PRIu64" \n",
 					_devname(dev), type, val);
 		return dev->fe->ops->set_reg(dev->fe, chan, dir, type, val);
 	}
