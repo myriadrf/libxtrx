@@ -1853,7 +1853,7 @@ static int _xtrx_val_set_int(struct xtrx_dev* dev, xtrx_direction_t dir,
 				 xtrx_channel_t chan, xtrx_val_t type, uint64_t val)
 {
 	if (type >= XTRX_RFIC_REG_0 && type < XTRX_DEBUG_0)	{
-		XTRXLLS_LOG("XTRX", XTRXLL_INFO, "%s: FE REG %x " PRIu64" \n",
+		XTRXLLS_LOG("XTRX", XTRXLL_INFO, "%s: FE REG %x %lx\n",
 					_devname(dev), type, val);
 		return dev->fe->ops->set_reg(dev->fe, chan, dir, type, val);
 	}
@@ -2119,7 +2119,9 @@ XTRX_API int xtrx_gpio_in(struct xtrx_dev* dev, int devno, unsigned* in)
 }
 
 static int _xtrx_gtime_ctrl(struct xtrx_dev* dev,
-							bool external, unsigned isec)
+							bool external,
+							unsigned isec,
+							bool fwen)
 {
 	int res;
 	res = xtrxll_set_param(dev->lldev,
@@ -2135,7 +2137,8 @@ static int _xtrx_gtime_ctrl(struct xtrx_dev* dev,
 
 	res = xtrxll_set_param(dev->lldev,
 						   XTRXLL_PARAM_GTIME_CTRL,
-						   (external) ? XTRXLL_GTIME_EXT_PPSFW : XTRXLL_GTIME_INT_ISO);
+						   (external) ?
+						   ((fwen) ? XTRXLL_GTIME_EXT_PPSFW : XTRXLL_GTIME_EXT_PPS) : XTRXLL_GTIME_INT_ISO);
 	if (res)
 		return res;
 
@@ -2156,7 +2159,9 @@ static int _xtrx_gtime_ctrl(struct xtrx_dev* dev,
 	if (res)
 		return res;
 
-	res = xtrxll_set_param(dev->lldev, XTRXLL_PARAM_ISOPPS_SETTIME, isec);
+	res = xtrxll_set_param(dev->lldev,
+						   (fwen) ? XTRXLL_PARAM_ISOPPS_SETTIME : XTRXLL_PARAM_CURPPS_SETTIME,
+						   isec);
 	if (res)
 		return res;
 
@@ -2173,12 +2178,13 @@ static int _xtrx_gtime_op(struct xtrx_dev* dev,
 
 	switch (cmd) {
 	case XTRX_GTIME_ENABLE_INT: {
-		return _xtrx_gtime_ctrl(dev, false, in.sec);
+		return _xtrx_gtime_ctrl(dev, false, in.sec, true);
 	}
 	case XTRX_GTIME_ENABLE_INT_WEXT:
-	case XTRX_GTIME_ENABLE_INT_WEXTE: {
+	case XTRX_GTIME_ENABLE_INT_WEXTE:
+	case XTRX_GTIME_ENABLE_INT_WEXTENFW: {
 		res = _xtrx_gpio_configure(dev,
-								   cmd == XTRX_GTIME_ENABLE_INT_WEXTE ? XTRX_GPIO_EPPS_O : XTRX_GPIO_PPS_O,
+								   cmd != XTRX_GTIME_ENABLE_INT_WEXT ? XTRX_GPIO_EPPS_O : XTRX_GPIO_PPS_O,
 								   XTRX_GPIO_FUNC_PPS_O);
 		if (res)
 			return res;
@@ -2187,14 +2193,17 @@ static int _xtrx_gtime_op(struct xtrx_dev* dev,
 		if (res)
 			return res;
 
-		return _xtrx_gtime_ctrl(dev, true, in.sec);
+		return _xtrx_gtime_ctrl(dev, true, in.sec,
+								cmd != XTRX_GTIME_ENABLE_INT_WEXTENFW);
 	}
-	case XTRX_GTIME_ENABLE_EXT: {
+	case XTRX_GTIME_ENABLE_EXT:
+	case XTRX_GTIME_ENABLE_EXTNFW: {
 		res = _xtrx_gpio_configure(dev, XTRX_GPIO_PPS_I, XTRX_GPIO_FUNC_PPS_I);
 		if (res)
 			return res;
 
-		return _xtrx_gtime_ctrl(dev, true, in.sec);
+		return _xtrx_gtime_ctrl(dev, true, in.sec,
+								cmd != XTRX_GTIME_ENABLE_EXTNFW);
 	}
 	case XTRX_GTIME_DISABLE: {
 		res = xtrxll_set_param(dev->lldev,
@@ -2222,6 +2231,10 @@ static int _xtrx_gtime_op(struct xtrx_dev* dev,
 	}
 	case XTRX_GTIME_SET_GENSEC: {
 		res = xtrxll_set_param(dev->lldev, XTRXLL_PARAM_ISOPPS_SETTIME, in.sec);
+		break;
+	}
+	case XTRX_GTIME_SET_CURSEC: {
+		res = xtrxll_set_param(dev->lldev, XTRXLL_PARAM_CURPPS_SETTIME, in.sec);
 		break;
 	}
 	case XTRX_GTIME_GET_CUR: {

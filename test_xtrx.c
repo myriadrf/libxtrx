@@ -860,7 +860,11 @@ int main(int argc, char** argv)
 	// Set XTRX parameters
 	//
 	if (refclk || extclk) {
-		xtrx_set_ref_clk(dev, refclk, (extclk) ? XTRX_CLKSRC_EXT : XTRX_CLKSRC_INT);
+		res = xtrx_set_ref_clk(dev, refclk, (extclk) ? XTRX_CLKSRC_EXT : XTRX_CLKSRC_INT);
+		if (res) {
+			fprintf(stderr, "Failed xtrx_set_ref_clk: %d\n", res);
+			goto falied_samplerate;
+		}
 	}
 
 	double master;
@@ -868,7 +872,7 @@ int main(int argc, char** argv)
 							  &master, &actual_rxsample_rate, &actual_txsample_rate);
 	if (res) {
 		fprintf(stderr, "Failed xtrx_set_samplerate: %d\n", res);
-		goto falied_samplerate;
+		//goto falied_samplerate;
 	}
 	fprintf(stderr, "Master: %.3f MHz; RX rate: %.3f MHz; TX rate: %.3f MHz\n",
 			master / 1e6,
@@ -967,11 +971,14 @@ int main(int argc, char** argv)
 			goto falied_tune;
 		}
 
-		unsigned cmd = (gmode == 3) ? XTRX_GTIME_ENABLE_INT_WEXTE :
+		unsigned cmd = (gmode == 6) ? XTRX_GTIME_ENABLE_EXT :
+						(gmode == 5) ? XTRX_GTIME_ENABLE_EXTNFW :
+						(gmode == 4) ? XTRX_GTIME_ENABLE_INT_WEXTENFW :
+						(gmode == 3) ? XTRX_GTIME_ENABLE_INT_WEXTE :
 						(gmode == 2) ? XTRX_GTIME_ENABLE_INT_WEXT :
 									 XTRX_GTIME_ENABLE_INT;
 
-		in.sec = 7;
+		in.sec = (gmode == 5) ? 4 : 7;
 		res = xtrx_gtime_op(dev, -1, cmd, in, &out);
 		if (res) {
 			fprintf(stderr, "Failed xtrx_gtime_op(3): %d\n", res);
