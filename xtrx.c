@@ -605,6 +605,10 @@ int xtrx_set_ref_clk(struct xtrx_dev* dev, unsigned refclkhz, xtrx_clock_source_
 						   _devname(dev),
 							(dev->clock_source) ? "EXT" : "INT",
 							(int)dev->refclock, osc);
+				// Pass it down to the RF FE
+				res = dev->fe->ops->fe_set_refclock(dev->fe, dev->refclock);
+				if (res)
+					return res;
 				break;
 			}
 		}
@@ -636,6 +640,11 @@ int xtrx_set_ref_clk(struct xtrx_dev* dev, unsigned refclkhz, xtrx_clock_source_
 
 		dev[devnum].refclock = dev->refclock;
 		dev[devnum].refclock_checked = dev->refclock_checked;
+
+		// Pass it down to the RF FE
+		res = dev[devnum].fe->ops->fe_set_refclock(dev[devnum].fe, dev->refclock);
+		if (res)
+			return res;
 	}
 
 	XTRXLLS_LOG("XTRX", XTRXLL_DEBUG, "%s: Set RefClk to %d Hz %s\n",

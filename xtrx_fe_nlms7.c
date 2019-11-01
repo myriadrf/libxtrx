@@ -426,6 +426,12 @@ int lms7nfe_dd_set_samplerate(struct xtrx_fe_obj* obj,
 	const int tx_gen = (tx_port == 1) ? lml1_use_mmcm : lml2_use_mmcm;
 	const int rx_gen = (rx_port == 2) ? lml2_use_mmcm : lml1_use_mmcm;
 
+	if (dev->refclock == 0 || dev->lms_state.fref == 0) {
+		XTRXLLS_LOG("LMSF", XTRXLL_ERROR, "%s: refclock is not set, can't set samplerate\n",
+		            xtrxll_get_name(dev->lldev));
+		return -EINVAL;
+	}
+
 	if (l2_pid == 0 && l1_pid == 0) {
 		XTRXLLS_LOG("LMSF", XTRXLL_ERROR, "%s: Incorrect FPGA port configuration HWID=%08x => TX=%d RX=%d\n",
 				   xtrxll_get_name(dev->lldev), hwid, tx_port, rx_port);
@@ -566,14 +572,12 @@ int lms7nfe_dd_set_samplerate(struct xtrx_fe_obj* obj,
 	dev->tx_host_inter = tx_host_inter;
 	dev->rx_host_decim = rx_host_decim;
 
-	dev->refclock = inrates->dac.refclk;
 	// 1. Set CGEN frequency
 	// --------------------------------------------------------------
 	for (unsigned j = 0; j < 40; j++) {
 		unsigned clkdiv = (dacdiv == 1) ? 0 :
 						  (dacdiv == 2) ? 1 :
 						  (dacdiv == 4) ? 2 : 3;
-		dev->lms_state.fref = dev->refclock;
 
 		res = lms7_cgen_tune_sync(&dev->lms_state,
 								  cgen_rate,
@@ -1280,6 +1284,14 @@ int lms7nfe_set_gain(struct xtrx_fe_obj* obj,
 	return res;
 }
 
+int lms7nfe_fe_set_refclock(struct xtrx_fe_obj* obj,
+					   double refclock)
+{
+	struct xtrx_nfe_lms7 *dev = (struct xtrx_nfe_lms7 *)obj;
+	dev->refclock = dev->lms_state.fref = refclock;
+	return 0;
+}
+
 int lms7nfe_fe_set_freq(struct xtrx_fe_obj* obj,
 					   unsigned channel,
 					   unsigned type,
@@ -1290,6 +1302,11 @@ int lms7nfe_fe_set_freq(struct xtrx_fe_obj* obj,
 	double res_freq = 0;
 	bool rx;
 	struct xtrx_nfe_lms7 *dev = (struct xtrx_nfe_lms7 *)obj;
+
+	if (dev->refclock == 0 || dev->lms_state.fref == 0) {
+		XTRXLLS_LOG("LMSF", XTRXLL_ERROR, "%s: refclock is not set, can't tune\n", xtrxll_get_name(dev->lldev));
+		return -EINVAL;
+	}
 
 	switch (type) {
 	case XTRX_TUNE_RX_FDD:
@@ -1537,6 +1554,7 @@ static const struct xtrx_fe_ops _lms7nfe_ops = {
 	lms7nfe_bb_set_badwidth,
 	lms7nfe_set_gain,
 
+	lms7nfe_fe_set_refclock,
 	lms7nfe_fe_set_freq,
 	lms7nfe_fe_set_lna,
 	lms7nfe_set_gain,

@@ -475,6 +475,14 @@ int lms7octocal_set_gain(struct xtrx_fe_obj* obj,
 							actualgain);
 }
 
+int lms7octocal_fe_set_refclock(struct xtrx_fe_obj* obj,
+                                double refclock)
+{
+	struct xtrx_lms7octocal *dev = (struct xtrx_lms7octocal *)obj;
+	return lms7nfe_fe_set_refclock((struct xtrx_fe_obj*)dev->lms,
+	                               refclock);
+}
+
 int lms7octocal_fe_set_freq(struct xtrx_fe_obj* obj,
 							unsigned channel,
 							unsigned type,
@@ -566,6 +574,7 @@ static const struct xtrx_fe_ops _lms7octocal_ops = {
 	lms7octocal_bb_set_badwidth,
 	lms7octocal_set_gain,
 
+	lms7octocal_fe_set_refclock,
 	lms7octocal_fe_set_freq,
 	lms7octocal_fe_set_lna,
 	lms7octocal_set_gain,

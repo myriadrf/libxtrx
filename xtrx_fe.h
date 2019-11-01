@@ -114,6 +114,9 @@ struct xtrx_fe_ops
 
 	// RF part
 
+	int (*fe_set_refclock)(struct xtrx_fe_obj* obj,
+					   double refclock);
+
 	int (*fe_set_freq)(struct xtrx_fe_obj* obj,
 					   unsigned channel,
 					   unsigned dir,

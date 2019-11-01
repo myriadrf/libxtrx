@@ -801,6 +801,14 @@ int lms7octo_set_gain(struct xtrx_fe_obj* obj,
 	return 0;
 }
 
+int lms7octo_fe_set_refclock(struct xtrx_fe_obj* obj,
+                             double refclock)
+{
+	struct xtrx_lms7octo *dev = (struct xtrx_lms7octo *)obj;
+	return lms7nfe_fe_set_refclock((struct xtrx_fe_obj*)dev->lms,
+	                               refclock);
+}
+
 #define ABSF(x) (((x) < 0) ? -(x) : (x))
 
 int lms7octo_fe_set_freq(struct xtrx_fe_obj* obj,
@@ -934,6 +942,7 @@ static const struct xtrx_fe_ops _lms7octo_ops = {
 	lms7octo_bb_set_badwidth,
 	lms7octo_set_gain,
 
+	lms7octo_fe_set_refclock,
 	lms7octo_fe_set_freq,
 	lms7octo_fe_set_lna,
 	lms7octo_set_gain,
