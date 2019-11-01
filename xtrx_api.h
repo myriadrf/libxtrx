@@ -196,7 +196,7 @@ typedef enum xtrx_samplerate_flags {
  * @param dev       XTRX device handle
  * @param cgen_rate CGEN clock rate, 0 for autoselect
  * @param rxrate    RX sample rate after all decimation stages (as seen on the PCIe interaface), 0 to disable RX
- * @param txrate    TX sample rate defore any interpolation (as seen on the PCIe interaface), 0 to disable TX
+ * @param txrate    TX sample rate before any interpolation (as seen on the PCIe interaface), 0 to disable TX
  * @param[out] actualcgen Actual CGEN clock
  * @param[out] actualrx   Actual RX clock
  * @param[out] actualtx   Actual TX clock
