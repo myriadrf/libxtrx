@@ -500,7 +500,6 @@ void SoapyXTRX::setSampleRate(const int direction, const size_t channel, const d
 {
 	std::unique_lock<std::recursive_mutex> lock(_dev->accessMutex);
 	SoapySDR::logf(SOAPY_SDR_DEBUG, "SoapyXTRX::setSampleRate(%d, %s, %g MHz)", int(channel), (direction == SOAPY_SDR_TX) ? "TX" : "RX", rate/1e6);
-	double master_clock;
 	if (direction == SOAPY_SDR_RX)
 	{
 		_tmp_rx = rate;
@@ -520,7 +519,7 @@ void SoapyXTRX::setSampleRate(const int direction, const size_t channel, const d
 
 	int ret = xtrx_set_samplerate(_dev->dev(), 0, _tmp_rx, _tmp_tx,
 								  0, //XTRX_SAMPLERATE_FORCE_UPDATE,
-								  &master_clock, &_actual_rx_rate, &_actual_tx_rate);
+								  &_actual_masterclock, &_actual_rx_rate, &_actual_tx_rate);
 
 	if (ret) {
 		SoapySDR::logf(SOAPY_SDR_ERROR, "SoapyXTRX::setSampleRate(%d, %s, %g MHz) - error %d",
