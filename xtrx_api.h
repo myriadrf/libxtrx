@@ -526,6 +526,8 @@ enum xtrx_recv_ex_info_flags {
 	RCVEX_EXTRA_LOG = 16,
 
 	RCVEX_TIMOUT = 32,
+
+	RCVEX_REPORT_GTIME = 64,
 };
 
 enum xtrx_recv_ex_info_events {

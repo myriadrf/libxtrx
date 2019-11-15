@@ -120,6 +120,8 @@ struct xtrx_dev {
 
 	unsigned               gpio_cfg_funcs;
 	unsigned               gpio_cfg_dir;
+
+	master_ts              gtime_start;
 };
 
 static const char* _devname(struct xtrx_dev* dev)
@@ -1210,6 +1212,7 @@ int xtrx_run_ex(struct xtrx_dev* dev, const xtrx_run_params_t* params)
 		dev[devnum].tx_fefmt = tx_fe_fmt;
 	}
 
+	dev->gtime_start = ~0UL;
 	/////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 	for (unsigned devnum = 0; devnum < dev->dev_max; devnum++) {
 		struct xtrxll_dmaop op;
@@ -1234,6 +1237,12 @@ int xtrx_run_ex(struct xtrx_dev* dev, const xtrx_run_params_t* params)
 			XTRXLLS_LOG("XTRX", XTRXLL_ERROR, "%s: Unable to start DMA err=%d\n",
 						_devname(&dev[devnum]), res);
 			goto fail_dma_start;
+		}
+
+		if (params->nflags & XTRX_RUN_GTIME) {
+			dev->gtime_start = params->gtime.sec * 1000000000UL + params->gtime.nsec;
+			XTRXLLS_LOG("XTRX", XTRXLL_ERROR, "%s: STIME=%ld\n",
+						_devname(&dev[devnum]), dev->gtime_start);
 		}
 	}
 
@@ -1576,6 +1585,9 @@ int xtrx_recv_sync_ex(struct xtrx_dev* mdev, xtrx_recv_ex_info_t* info)
 					_devname(mdev));
 		return -ENOSTR;
 	}
+	if ((info->flags & RCVEX_REPORT_GTIME) && (mdev->gtime_start == ~0UL)) {
+		return -EINVAL;
+	}
 
 	const int chan = 0;
 	/* One sample in all channels in bytes */
@@ -1596,6 +1608,7 @@ int xtrx_recv_sync_ex(struct xtrx_dev* mdev, xtrx_recv_ex_info_t* info)
 
 	const bool single_ch_streaming = (info->buffer_count == mdev->dev_max);
 
+	master_ts gstarttm = mdev->gtime_start;
 	info->out_samples = 0;
 	info->out_events = 0;
 
@@ -1665,6 +1678,10 @@ got_buffer:
 
 		if (user_processed == 0) {
 			info->out_first_sample = dev->rx_samples >> dev->rx_host_decim;
+			if (info->flags & RCVEX_REPORT_GTIME) {
+				info->out_first_sample = gstarttm +
+						info->out_first_sample * 1000000000UL / dev->refclock;
+			}
 		}
 /*
 		XTRXLLS_LOG("XTRX", (dev->rxbuf_ts + dev->rxbuf_processed_ts != dev->rx_samples) ? XTRXLL_WARNING : XTRXLL_DEBUG,
@@ -1710,6 +1727,10 @@ got_buffer:
 				dev->rx_samples = dev->rxbuf_ts + dev->rxbuf_processed_ts;
 				if (user_processed == 0) {
 					info->out_first_sample = dev->rx_samples >> dev->rx_host_decim;
+					if (info->flags & RCVEX_REPORT_GTIME) {
+						info->out_first_sample = gstarttm +
+								info->out_first_sample * 1000000000UL / dev->refclock;
+					}
 				} else {
 					/* Lost data in the middle of filling, no concatenation */
 					return 0;

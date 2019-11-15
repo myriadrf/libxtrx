@@ -52,7 +52,7 @@ double parse_val(const char* a)
 	return z;
 }
 
-
+static int rx_rep_gtime = 0;
 static uint32_t s_tx_skip = 8192;
 static unsigned s_logp = 0;
 
@@ -320,6 +320,10 @@ int stream_rx(struct stream_data* sdata,
 			ri.buffer_count = buf_cnt;
 			ri.buffers = stream_buffers;
 			ri.flags = 0;
+
+			if (rx_rep_gtime) {
+				ri.flags |= RCVEX_REPORT_GTIME;
+			}
 
 			uint64_t sa = grtime();
 			uint64_t da = sa - sp;
@@ -963,6 +967,8 @@ int main(int argc, char** argv)
 	}
 
 	if (gmode > 0) {
+		rx_rep_gtime = 1;
+
 		gtime_data_t in = {0,0};
 		gtime_data_t out;
 		res = xtrx_gtime_op(dev, -1, XTRX_GTIME_DISABLE, in, &out);
