@@ -996,6 +996,7 @@ SoapySDR::Stream *SoapyXTRX::setupStream(
 	//TODO: multi stream
 	std::unique_lock<std::recursive_mutex> lock(_dev->accessMutex);
 	xtrx_run_stream_params_t *params;
+	xtrx_antenna_t antenna;
 	size_t num_channels = channels.size();
 	if (num_channels < 1)
 		num_channels = 1;
@@ -1007,6 +1008,7 @@ SoapySDR::Stream *SoapyXTRX::setupStream(
 
 		params = &_stream_params.rx;
 		_rx_channels = num_channels;
+		antenna = XTRX_RX_AUTO;
 
 		xtrx_stop(_dev->dev(), XTRX_RX);
 	} else if (direction == SOAPY_SDR_TX) {
@@ -1016,6 +1018,7 @@ SoapySDR::Stream *SoapyXTRX::setupStream(
 
 		params = &_stream_params.tx;
 		_tx_channels = num_channels;
+		antenna = XTRX_TX_AUTO;
 
 		xtrx_stop(_dev->dev(), XTRX_TX);
 	} else {
@@ -1089,6 +1092,11 @@ SoapySDR::Stream *SoapyXTRX::setupStream(
 		}
 	} else {
 		throw std::runtime_error("SoapyXTRX::setupStream() unsupported number of channels!");
+	}
+
+	int res = xtrx_set_antenna(_dev->dev(), antenna);
+	if (res) {
+		throw std::runtime_error("SoapyXTRX::setupStream() set antenna AUTO xtrx_set_antenna() err");
 	}
 
 	if (direction == SOAPY_SDR_RX) {
