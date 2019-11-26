@@ -148,6 +148,7 @@ void SoapyXTRX::setAntenna(const int direction, const size_t channel, const std:
 		if (name == "LNAH" || name == "RXH") a = XTRX_RX_H;
 		else if (name == "LNAL" || name == "RXL") a = XTRX_RX_L;
 		else if (name == "LNAW" || name == "RXW") a = XTRX_RX_W;
+		else if (name == "AUTO") a = XTRX_RX_AUTO;
 		else throw std::runtime_error("SoapyXTRX::setAntenna(RX, "+name+") - unknown antenna name");
 
 		_rx_ant = a;
@@ -156,6 +157,7 @@ void SoapyXTRX::setAntenna(const int direction, const size_t channel, const std:
 	{
 		if (name == "BAND1" || name == "B1" || name == "TXH") a = XTRX_TX_H;
 		else if (name == "BAND2" || name == "B2" || name == "TXW") a = XTRX_TX_W;
+		else if (name == "AUTO") a = XTRX_TX_AUTO;
 		else throw std::runtime_error("SoapyXTRX::setAntenna(TX, "+name+") - unknown antenna name");
 
 		_tx_ant = a;
