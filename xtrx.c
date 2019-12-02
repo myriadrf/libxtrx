@@ -1043,7 +1043,7 @@ int xtrx_run_ex(struct xtrx_dev* dev, const xtrx_run_params_t* params)
 			if (res) {
 				goto failed_fe;
 			}
-			XTRXLLS_LOG("XTRX", XTRXLL_INFO, "%s: RX ititialized to %d bytes paket size\n",
+			XTRXLLS_LOG("XTRX", XTRXLL_INFO, "%s: RX initialized to %d bytes packet size\n",
 						_devname(&dev[devnum]), rx_bpkt_size);
 			dev[devnum].rxinit = 1;
 		}
