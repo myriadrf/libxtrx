@@ -318,6 +318,7 @@ private:
 	double _ref_clk = 30.72e6;
 	xtrx_clock_source_t _ref_source = XTRX_CLKSRC_INT;
 
+	bool _sync_rx_tx_streams_act = false;
 	xtrx_run_params_t _stream_params;
 
 	long long _tx_internal; ///< Internal timestamp counter for "streamed" (i.e. non-timestamped) transmit.
