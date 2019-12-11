@@ -1314,7 +1314,7 @@ int SoapyXTRX::writeStream(
 	nfo.buffers = buffs;
 	nfo.flags = 0;
 	nfo.samples = toSend;
-	nfo.ts = 2*ts;
+	nfo.ts = ts;
 	nfo.timeout = timeoutUs / 1000;
 
 	//std::cerr << "SAMPLES: " << numElems << " TS:" << ts <<std::endl;
