@@ -1191,7 +1191,8 @@ int SoapyXTRX::activateStream(
 		} else {
 			_tx_internal = 32768;
 		}
-	} else {
+	}
+	if ((stream != STREAM_RX) && (stream != STREAM_TX)) {
 		throw std::runtime_error("SoapyXTRX::activateStream() - incorrect stream");
 	}
 
