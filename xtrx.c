@@ -467,7 +467,8 @@ int xtrx_open_string(const char* paramstring, struct xtrx_dev** dev)
 	params.devices = (const char**)ldevices;
 
 	if (paramstring) {
-		strncpy(copypstr, paramstring, sizeof(copypstr));
+		strncpy(copypstr, paramstring, sizeof(copypstr) - 1);
+		copypstr[sizeof(copypstr) - 1] = '\0';
 		devices = copypstr;
 
 		char* separator = strstr(copypstr, ";;");
