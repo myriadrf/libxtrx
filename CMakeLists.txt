@@ -54,9 +54,9 @@ endif()
 
 add_definitions(-Wall -g)
 
+set(XTRX_RUNTIME_DIR      bin)
 set(XTRX_LIBRARY_DIR      lib${LIB_SUFFIX})
 set(XTRX_INCLUDE_DIR      include)
-set(XTRX_UTILS_DIR        ${XTRX_LIBRARY_DIR}/xtrx)
 
 CONFIGURE_FILE(
 	${CMAKE_CURRENT_SOURCE_DIR}/libxtrx.pc.in
@@ -113,8 +113,8 @@ endif()
 ########################################################################
 # install libraries
 ########################################################################
-install(TARGETS xtrx DESTINATION ${XTRX_LIBRARY_DIR})
-install(TARGETS test_xtrx DESTINATION ${XTRX_UTILS_DIR})
+install(TARGETS xtrx DESTINATION ${XTRX_RUNTIME_DIR})
+install(TARGETS test_xtrx DESTINATION ${XTRX_RUNTIME_DIR})
 
 ########################################################################
 # install headers

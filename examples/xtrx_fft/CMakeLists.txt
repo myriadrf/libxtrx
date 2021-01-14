@@ -28,4 +28,4 @@ include_directories(${LIBXTRX_INCLUDE_DIRS})
 
 add_executable(xtrx_fft ${mainwindow_SRCS})
 target_link_libraries(xtrx_fft Qt5::Widgets Qt5::PrintSupport ${QCustomPlot_LIBRARIES} ${LIBXTRX_LIBRARIES})
-install(TARGETS xtrx_fft DESTINATION ${XTRX_UTILS_DIR})
+install(TARGETS xtrx_fft DESTINATION ${XTRX_RUNTIME_DIR})
