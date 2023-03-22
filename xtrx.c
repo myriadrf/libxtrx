@@ -354,6 +354,15 @@ int xtrx_open(const char* device, unsigned flags, struct xtrx_dev** outdev)
 	}
 
 	*outdev = dev;
+
+	/* We need to set a samplerate, otherwise if we set frequency first, it will crash due to a divide of fref by zero.*/
+    unsigned int MIN_TX_RATE = 2100000;
+    double master_clock;
+    double _actual_rx_rate;
+    double _actual_tx_rate;
+    int ret = xtrx_set_samplerate(dev, 0, MIN_TX_RATE, MIN_TX_RATE,
+                                  0, //XTRX_SAMPLERATE_FORCE_UPDATE,
+                                  &master_clock, &_actual_rx_rate, &_actual_tx_rate);
 	return 0;
 
 
