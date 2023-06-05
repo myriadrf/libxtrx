@@ -56,7 +56,7 @@ add_definitions(-Wall -g)
 
 set(XTRX_LIBRARY_DIR      lib${LIB_SUFFIX})
 set(XTRX_INCLUDE_DIR      include)
-set(XTRX_UTILS_DIR        ${XTRX_LIBRARY_DIR}/xtrx)
+set(XTRX_UTILS_DIR        bin)
 
 CONFIGURE_FILE(
 	${CMAKE_CURRENT_SOURCE_DIR}/libxtrx.pc.in
